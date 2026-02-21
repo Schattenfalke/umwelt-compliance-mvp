@@ -1,0 +1,89 @@
+export type Role = "ADMIN" | "REQUESTER" | "WORKER" | "QA";
+
+export type TicketStatus =
+  | "NEW"
+  | "QUALIFIED"
+  | "PUBLISHED"
+  | "ACCEPTED"
+  | "PROOF_SUBMITTED"
+  | "NEEDS_CHANGES"
+  | "COMPLETED"
+  | "REJECTED"
+  | "ARCHIVED";
+
+export type Ticket = {
+  id: string;
+  project_id: string | null;
+  creator_user_id: string;
+  title: string;
+  description: string;
+  category: string;
+  task_class: number;
+  status: TicketStatus;
+  location_lat: number;
+  location_lng: number;
+  geofence_radius_m: number;
+  time_window_start: string | null;
+  time_window_end: string | null;
+  deadline_at: string;
+  proof_policy_json: Record<string, unknown>;
+  safety_flags_json: Record<string, unknown>;
+  accepted_by_user_id: string | null;
+  accepted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Proof = {
+  id: string;
+  ticket_id: string;
+  submitted_by_user_id: string;
+  submitted_at: string;
+  gps_lat: number | null;
+  gps_lng: number | null;
+  captured_at: string | null;
+  validation_flags_json: Record<string, unknown>;
+  checklist_answers_json: Record<string, unknown>;
+  notes: string;
+  qa_status: string;
+  qa_decision_at: string | null;
+  qa_decision_by: string | null;
+  qa_comment: string | null;
+  files?: Array<{
+    id: string;
+    file_key: string;
+    file_mime: string;
+    file_size: number;
+    sha256: string;
+    created_at: string;
+  }>;
+};
+
+export type TicketDetail = Ticket & {
+  proofs: Proof[];
+  status_events: Array<{
+    id: string;
+    from_status: string | null;
+    to_status: string;
+    event_type: string;
+    payload_json: Record<string, unknown>;
+    created_at: string;
+  }>;
+};
+
+export type UserJwt = {
+  id: string;
+  email: string;
+  role: Role;
+  exp: number;
+  iat: number;
+};
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: Role;
+  is_verified: boolean;
+  created_at: string;
+};

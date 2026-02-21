@@ -1,0 +1,37 @@
+# DECISIONS (MVP Defaults)
+
+Datum: 2026-02-21
+
+1. Auth-Default
+- Unklarheit: Datenmodell hat kein `password_hash` Feld.
+- Entscheidung: Login bleibt `email + password`, aber Passwort wird als gemeinsames MVP-Demo-Passwort (`AUTH_DEMO_PASSWORD`) validiert.
+- Folge: Demo-User werden beim API-Start per Seed angelegt (`admin/requester/worker/qa`).
+
+2. Worker-Accept Policy
+- Unklarheit: "1 aktives Ticket pro Worker" ist im Datenmodell als optional markiert.
+- Entscheidung: Policy ist aktiv.
+- Folge: Worker kann kein weiteres Ticket auf `ACCEPTED` setzen, solange bereits ein eigenes `ACCEPTED` Ticket existiert.
+
+3. Reject/Rework Pfad
+- Unklarheit: PRD nennt "Ausgespielt oder Abgelehnt", State-Machine nennt `PROOF_SUBMITTED -> REJECTED` und `REJECTED -> PUBLISHED`.
+- Entscheidung: QA `REJECT` setzt Ticket auf `REJECTED`; Rework erfolgt durch erneutes `publish` (`REJECTED -> PUBLISHED`).
+
+4. Escalation-Verknuepfung
+- Unklarheit: Datenmodell hat keine explizite `linked_ticket_id` Spalte.
+- Entscheidung: Bei `ESCALATE` wird ein neues Klasse-3 Ticket in `NEW` erstellt, Verknuepfung ueber `proof_policy_json.source_ticket_id` und `status_events.payload_json`.
+
+5. Geo/Time Validation Verhalten
+- Unklarheit: Ob Upload bei Geo/Time-Fehler blockiert werden soll.
+- Entscheidung: Upload wird nicht blockiert; Flags (`geofence_ok`, `time_ok`, `exif_present`) werden persistiert und QA entscheidet.
+
+6. Storage-Default
+- Unklarheit: Tech Spec nennt S3/MinIO optional, User fordert Docker nur fuer Postgres+API+Web.
+- Entscheidung: Proof-Dateien werden lokal im API-Container gespeichert (`UPLOAD_DIR`) und nur als Metadaten im MVP verwendet.
+
+7. QA Queue API
+- Unklarheit: OpenAPI hat kein dediziertes QA-Queue Endpoint.
+- Entscheidung: QA Queue wird ueber `GET /tickets?status=PROOF_SUBMITTED` aufgebaut.
+
+8. Admin-Minimum
+- Unklarheit: UI-Flow fordert Admin-User-Rollenpflege, OpenAPI listet keine Admin-Endpunkte.
+- Entscheidung: Minimal ergaenzt um `GET /admin/users` und `PATCH /admin/users/{userId}/role` fuer die geforderte Admin-Funktion.

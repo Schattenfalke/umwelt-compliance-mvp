@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-tests
+coverage
+.env
+.env.*
+!.env.example
+api/node_modules
+api/dist
+api/coverage
+web/node_modules
+web/dist
+uploads
+.DS_Store
+*.tsbuildinfo

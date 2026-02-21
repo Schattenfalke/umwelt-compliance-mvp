@@ -1,0 +1,10 @@
+{
+  "name": "umwelt-compliance-mvp",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "api:test": "npm --prefix api run test",
+    "api:dev": "npm --prefix api run dev",
+    "web:dev": "npm --prefix web run dev"
+  }
+}
