@@ -1,0 +1,262 @@
+openapi: 3.0.3
+info:
+  title: Umwelt-Compliance Micro-Services API
+  version: "0.1"
+servers:
+  - url: http://localhost:8080
+paths:
+  /auth/login:
+    post:
+      summary: Login (email/password oder magic link placeholder)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+              required: [email, password]
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+  /tickets:
+    get:
+      summary: List tickets (filters)
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: near_lat
+          schema: { type: number }
+        - in: query
+          name: near_lng
+          schema: { type: number }
+        - in: query
+          name: near_radius_km
+          schema: { type: number, default: 10 }
+      responses:
+        "200":
+          description: ticket list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Ticket' }
+    post:
+      summary: Create ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketCreate' }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /tickets/{ticketId}:
+    get:
+      summary: Get ticket detail
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+  /tickets/{ticketId}/qualify:
+    post:
+      summary: QA qualify ticket (NEW->QUALIFIED)
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_class: { type: integer, enum: [1,2,3] }
+                proof_policy_json: { type: object }
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /tickets/{ticketId}/publish:
+    post:
+      summary: Publish ticket (QUALIFIED->PUBLISHED)
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /tickets/{ticketId}/accept:
+    post:
+      summary: Worker accepts ticket (PUBLISHED->ACCEPTED)
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /tickets/{ticketId}/proofs:
+    post:
+      summary: Submit proof for ticket
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                notes: { type: string }
+                checklist_answers_json:
+                  type: string
+                  description: JSON string
+                gps_lat: { type: number }
+                gps_lng: { type: number }
+                captured_at: { type: string, format: date-time }
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+              required: [files, checklist_answers_json]
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proof' }
+  /proofs/{proofId}/qa:
+    post:
+      summary: QA decision for proof
+      parameters:
+        - in: path
+          name: proofId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision: { type: string, enum: [APPROVE, REQUEST_CHANGES, REJECT, ESCALATE] }
+                comment: { type: string }
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proof' }
+  /tickets/{ticketId}/report.pdf:
+    get:
+      summary: Download ticket report PDF
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: pdf
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+components:
+  schemas:
+    Ticket:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        category: { type: string }
+        task_class: { type: integer }
+        status: { type: string }
+        location_lat: { type: number }
+        location_lng: { type: number }
+        geofence_radius_m: { type: integer }
+        deadline_at: { type: string, format: date-time }
+        accepted_by_user_id: { type: string, format: uuid, nullable: true }
+    TicketCreate:
+      type: object
+      properties:
+        project_id: { type: string, format: uuid, nullable: true }
+        title: { type: string }
+        description: { type: string }
+        category: { type: string }
+        task_class: { type: integer, enum: [1,2,3] }
+        location_lat: { type: number }
+        location_lng: { type: number }
+        geofence_radius_m: { type: integer }
+        time_window_start: { type: string, format: date-time, nullable: true }
+        time_window_end: { type: string, format: date-time, nullable: true }
+        deadline_at: { type: string, format: date-time }
+        proof_policy_json: { type: object }
+        safety_flags_json: { type: object }
+      required: [title, category, task_class, location_lat, location_lng, geofence_radius_m, deadline_at]
+    TicketDetail:
+      allOf:
+        - $ref: '#/components/schemas/Ticket'
+        - type: object
+          properties:
+            description: { type: string }
+            proof_policy_json: { type: object }
+            safety_flags_json: { type: object }
+            proofs:
+              type: array
+              items: { $ref: '#/components/schemas/Proof' }
+    Proof:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        submitted_by_user_id: { type: string, format: uuid }
+        submitted_at: { type: string, format: date-time }
+        gps_lat: { type: number, nullable: true }
+        gps_lng: { type: number, nullable: true }
+        captured_at: { type: string, format: date-time, nullable: true }
+        validation_flags_json: { type: object }
+        checklist_answers_json: { type: object }
+        notes: { type: string }
+        qa_status: { type: string }
