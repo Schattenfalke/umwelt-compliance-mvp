@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { haversineDistanceMeters, validateGeofence, validateTimeWindow } from "../src/lib/geoTimeValidation";
+import { buildValidationFlags, haversineDistanceMeters, validateGeofence, validateTimeWindow } from "../src/lib/geoTimeValidation";
 import { canTransition, assertTransition } from "../src/lib/statusMachine";
 import { hasPermission, requirePermission } from "../src/lib/rbac";
 import { checkSlidingWindowRateLimit, clearRateLimitState } from "../src/lib/rateLimit";
@@ -53,6 +53,38 @@ function runGeoTimeTests(): void {
     }),
     false
   );
+
+  const flagsWithExif = buildValidationFlags({
+    ticketLat: 52.52,
+    ticketLng: 13.405,
+    proofLat: 52.5202,
+    proofLng: 13.4052,
+    geofenceRadiusM: 50,
+    requireGps: true,
+    timeWindowStart: null,
+    timeWindowEnd: null,
+    deadlineAt: new Date("2026-01-01T12:00:00Z"),
+    capturedAt: null,
+    submittedAt: new Date("2026-01-01T11:00:00Z"),
+    exifPresent: true
+  });
+  assert.equal(flagsWithExif.exif_present, true);
+
+  const flagsWithoutExif = buildValidationFlags({
+    ticketLat: 52.52,
+    ticketLng: 13.405,
+    proofLat: 52.5202,
+    proofLng: 13.4052,
+    geofenceRadiusM: 50,
+    requireGps: true,
+    timeWindowStart: null,
+    timeWindowEnd: null,
+    deadlineAt: new Date("2026-01-01T12:00:00Z"),
+    capturedAt: null,
+    submittedAt: new Date("2026-01-01T11:00:00Z"),
+    exifPresent: false
+  });
+  assert.equal(flagsWithoutExif.exif_present, false);
 }
 
 function runStatusTransitionTests(): void {
@@ -75,6 +107,8 @@ function runRbacTests(): void {
   assert.equal(hasPermission("QA", "proof:qa"), true);
   assert.equal(hasPermission("ADMIN", "admin:users:read"), true);
   assert.equal(hasPermission("ADMIN", "admin:metrics:read"), true);
+  assert.equal(hasPermission("REQUESTER", "project:create"), true);
+  assert.equal(hasPermission("WORKER", "project:create"), false);
   assert.equal(hasPermission("REQUESTER", "template:list"), true);
   assert.equal(hasPermission("REQUESTER", "template:write"), false);
   assert.throws(() => requirePermission("WORKER", "ticket:create"), /FORBIDDEN:ticket:create/);

@@ -1,6 +1,8 @@
 import { Role } from "../types";
 
 type Permission =
+  | "project:create"
+  | "project:list"
   | "ticket:create"
   | "ticket:list"
   | "ticket:detail"
@@ -18,6 +20,8 @@ type Permission =
 
 const matrix: Record<Role, Permission[]> = {
   ADMIN: [
+    "project:create",
+    "project:list",
     "ticket:create",
     "ticket:list",
     "ticket:detail",
@@ -33,9 +37,9 @@ const matrix: Record<Role, Permission[]> = {
     "admin:users:write",
     "admin:metrics:read"
   ],
-  REQUESTER: ["ticket:create", "ticket:list", "ticket:detail", "report:read", "template:list"],
-  WORKER: ["ticket:list", "ticket:detail", "ticket:accept", "proof:submit", "template:list"],
-  QA: ["ticket:list", "ticket:detail", "ticket:qualify", "ticket:publish", "proof:qa", "report:read", "template:list"]
+  REQUESTER: ["project:create", "project:list", "ticket:create", "ticket:list", "ticket:detail", "report:read", "template:list"],
+  WORKER: ["project:list", "ticket:list", "ticket:detail", "ticket:accept", "proof:submit", "template:list"],
+  QA: ["project:list", "ticket:list", "ticket:detail", "ticket:qualify", "ticket:publish", "proof:qa", "report:read", "template:list"]
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

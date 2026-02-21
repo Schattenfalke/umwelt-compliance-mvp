@@ -113,3 +113,22 @@ export type AdminMetrics = {
     change_request_rate: number | null;
   };
 };
+
+export type Project = {
+  id: string;
+  owner_user_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+};
+
+export type QaQueueEntry = {
+  proof_id: string;
+  ticket_id: string;
+  ticket_title: string;
+  category: string;
+  submitted_by_user_id: string;
+  submitted_at: string;
+  validation_flags_json: Record<string, unknown>;
+  qa_status: string;
+};

@@ -17,6 +17,8 @@ import { writeStatusEvent } from "../lib/audit";
 import { checkSlidingWindowRateLimit } from "../lib/rateLimit";
 import { ProofPolicy, QaDecision, QA_DECISIONS, Role, TicketStatus } from "../types";
 
+const jpegExif: { fromBuffer: (buffer: Buffer) => Record<string, unknown> | undefined } = require("jpeg-exif");
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1)
@@ -80,6 +82,11 @@ const templateUpdateSchema = z.object({
   default_geofence_radius_m: z.number().int().min(5).max(2000).optional()
 });
 
+const projectCreateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional().default("")
+});
+
 const qualifySchema = z.object({
   task_class: z.number().int().min(1).max(3).optional(),
   proof_policy_json: z.record(z.any()).optional()
@@ -131,6 +138,14 @@ type DbProof = {
   created_at: string;
 };
 
+type DbProject = {
+  id: string;
+  owner_user_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+};
+
 type DbTemplate = {
   id: string;
   name: string;
@@ -139,6 +154,16 @@ type DbTemplate = {
   checklist_json: Record<string, unknown>;
   proof_policy_json: Record<string, unknown>;
   default_geofence_radius_m: number;
+  created_at: string;
+};
+
+type DbProofFile = {
+  id: string;
+  proof_id: string;
+  file_key: string;
+  file_mime: string;
+  file_size: number;
+  sha256: string | null;
   created_at: string;
 };
 
@@ -162,6 +187,106 @@ function getProofPolicy(raw: unknown): Required<Pick<ProofPolicy, "min_photos" |
     redundancy: policy.redundancy,
     required_fields: Array.isArray(policy.required_fields) ? policy.required_fields : []
   };
+}
+
+function getRequiredRedundancy(rawPolicy: unknown): number {
+  const policy = getProofPolicy(rawPolicy);
+  const rawRedundancy = policy.redundancy;
+  if (typeof rawRedundancy !== "number" || !Number.isFinite(rawRedundancy)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(rawRedundancy));
+}
+
+function parseOptionalNumberField(value: unknown, fieldName: string): number | null {
+  if (value == null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`BAD_REQUEST:${fieldName} must be a valid number`);
+  }
+  return parsed;
+}
+
+function parseOptionalDateField(value: unknown, fieldName: string): Date | null {
+  if (value == null || value === "") {
+    return null;
+  }
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`BAD_REQUEST:${fieldName} must be a valid datetime`);
+  }
+  return parsed;
+}
+
+function parseExifDate(value: unknown): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const normalized = value.trim().replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3").replace(" ", "T");
+  const withTimezone = /[zZ]|[+-]\d{2}:\d{2}$/.test(normalized) ? normalized : `${normalized}Z`;
+  const parsed = new Date(withTimezone);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed;
+}
+
+function dmsToDecimal(value: unknown, ref: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (!Array.isArray(value) || value.length < 3) {
+    return null;
+  }
+
+  const deg = Number(value[0]);
+  const min = Number(value[1]);
+  const sec = Number(value[2]);
+
+  if (!Number.isFinite(deg) || !Number.isFinite(min) || !Number.isFinite(sec)) {
+    return null;
+  }
+
+  let decimal = deg + min / 60 + sec / 3600;
+  const direction = typeof ref === "string" ? ref.toUpperCase() : "";
+  if (direction === "S" || direction === "W") {
+    decimal *= -1;
+  }
+  return decimal;
+}
+
+function extractExifMetadata(buffer: Buffer): {
+  gpsLat: number | null;
+  gpsLng: number | null;
+  capturedAt: Date | null;
+  hasExif: boolean;
+} {
+  try {
+    const raw = jpegExif.fromBuffer(buffer) ?? {};
+    const subExif = (raw.SubExif ?? {}) as Record<string, unknown>;
+    const gpsInfo = (raw.GPSInfo ?? {}) as Record<string, unknown>;
+
+    const capturedAt = parseExifDate(subExif.DateTimeOriginal ?? subExif.CreateDate);
+    const gpsLat = dmsToDecimal(gpsInfo.GPSLatitude, gpsInfo.GPSLatitudeRef);
+    const gpsLng = dmsToDecimal(gpsInfo.GPSLongitude, gpsInfo.GPSLongitudeRef);
+
+    return {
+      gpsLat,
+      gpsLng,
+      capturedAt,
+      hasExif: capturedAt != null || gpsLat != null || gpsLng != null
+    };
+  } catch (_error) {
+    return {
+      gpsLat: null,
+      gpsLng: null,
+      capturedAt: null,
+      hasExif: false
+    };
+  }
 }
 
 async function getTicketOrThrow(ticketId: string): Promise<DbTicket> {
@@ -264,6 +389,41 @@ export function registerRoutes(app: Express): void {
   );
 
   app.use(authenticate);
+
+  app.get(
+    "/projects",
+    authorize("project:list"),
+    asyncHandler(async (req, res) => {
+      if (req.user?.role === "REQUESTER") {
+        const ownProjects = await pool.query<DbProject>(
+          "SELECT * FROM projects WHERE owner_user_id = $1 ORDER BY created_at DESC",
+          [req.user.id]
+        );
+        res.json(ownProjects.rows);
+        return;
+      }
+
+      const projects = await pool.query<DbProject>("SELECT * FROM projects ORDER BY created_at DESC");
+      res.json(projects.rows);
+    })
+  );
+
+  app.post(
+    "/projects",
+    authorize("project:create"),
+    asyncHandler(async (req, res) => {
+      const payload = projectCreateSchema.parse(req.body);
+      const created = await pool.query<DbProject>(
+        `
+        INSERT INTO projects (owner_user_id, name, description)
+        VALUES ($1,$2,$3)
+        RETURNING *
+        `,
+        [req.user!.id, payload.name, payload.description]
+      );
+      res.status(201).json(created.rows[0]);
+    })
+  );
 
   app.get(
     "/admin/users",
@@ -397,6 +557,95 @@ export function registerRoutes(app: Express): void {
     })
   );
 
+  app.get(
+    "/qa/queue",
+    authorize("proof:qa"),
+    asyncHandler(async (req, res) => {
+      const flag = typeof req.query.flag === "string" ? req.query.flag : null;
+      const whereParts = ["t.status = 'PROOF_SUBMITTED'", "p.qa_status = 'PENDING'"];
+
+      if (flag === "geo_fail") {
+        whereParts.push("COALESCE((p.validation_flags_json->>'geofence_ok')::boolean, false) = false");
+      } else if (flag === "time_fail") {
+        whereParts.push("COALESCE((p.validation_flags_json->>'time_ok')::boolean, false) = false");
+      } else if (flag === "exif_missing") {
+        whereParts.push("COALESCE((p.validation_flags_json->>'exif_present')::boolean, false) = false");
+      } else if (flag != null && flag !== "all") {
+        throw new Error("BAD_REQUEST:Unsupported QA queue flag filter");
+      }
+
+      const result = await pool.query(
+        `
+        SELECT
+          p.id AS proof_id,
+          p.ticket_id,
+          t.title AS ticket_title,
+          t.category,
+          p.submitted_by_user_id,
+          p.submitted_at,
+          p.validation_flags_json,
+          p.qa_status
+        FROM proofs p
+        JOIN tickets t ON t.id = p.ticket_id
+        WHERE ${whereParts.join(" AND ")}
+        ORDER BY p.submitted_at DESC
+        `
+      );
+
+      res.json(result.rows);
+    })
+  );
+
+  app.get(
+    "/proofs/:proofId/files/:fileId",
+    authorize("proof:qa"),
+    asyncHandler(async (req, res) => {
+      const proofResult = await pool.query<Pick<DbProof, "id" | "ticket_id">>(
+        "SELECT id, ticket_id FROM proofs WHERE id = $1",
+        [req.params.proofId]
+      );
+      const proof = proofResult.rows[0];
+      if (!proof) {
+        throw new Error("NOT_FOUND:Proof not found");
+      }
+
+      const fileResult = await pool.query<DbProofFile>(
+        "SELECT * FROM proof_files WHERE id = $1 AND proof_id = $2",
+        [req.params.fileId, req.params.proofId]
+      );
+      const file = fileResult.rows[0];
+      if (!file) {
+        throw new Error("NOT_FOUND:Proof file not found");
+      }
+
+      await getTicketOrThrow(proof.ticket_id);
+
+      const uploadDir = path.resolve(config.UPLOAD_DIR);
+      const absolutePath = path.resolve(uploadDir, path.basename(file.file_key));
+
+      if (!absolutePath.startsWith(uploadDir)) {
+        throw new Error("BAD_REQUEST:Invalid file path");
+      }
+      if (!fs.existsSync(absolutePath)) {
+        throw new Error("NOT_FOUND:Stored file not found");
+      }
+
+      res.setHeader("Content-Type", file.file_mime);
+      res.setHeader("Content-Disposition", `inline; filename=${path.basename(file.file_key)}`);
+      res.setHeader("Content-Length", String(file.file_size));
+
+      const stream = fs.createReadStream(absolutePath);
+      stream.on("error", () => {
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to stream file" });
+        } else {
+          res.end();
+        }
+      });
+      stream.pipe(res);
+    })
+  );
+
   app.post(
     "/templates",
     authorize("template:write"),
@@ -497,6 +746,7 @@ export function registerRoutes(app: Express): void {
     authorize("ticket:list"),
     asyncHandler(async (req, res) => {
       const statusFilter = typeof req.query.status === "string" ? req.query.status : null;
+      const projectFilter = typeof req.query.project_id === "string" ? req.query.project_id : null;
       const nearLat = typeof req.query.near_lat === "string" ? Number(req.query.near_lat) : null;
       const nearLng = typeof req.query.near_lng === "string" ? Number(req.query.near_lng) : null;
       const nearRadiusKm =
@@ -508,6 +758,11 @@ export function registerRoutes(app: Express): void {
       if (statusFilter) {
         params.push(statusFilter);
         whereParts.push(`status = $${params.length}`);
+      }
+
+      if (projectFilter) {
+        params.push(projectFilter);
+        whereParts.push(`project_id = $${params.length}`);
       }
 
       if (req.user?.role === "WORKER" && !statusFilter) {
@@ -738,7 +993,7 @@ export function registerRoutes(app: Express): void {
     asyncHandler(async (req, res) => {
       const ticket = await getTicketOrThrow(req.params.ticketId);
 
-      if (!["ACCEPTED", "NEEDS_CHANGES"].includes(ticket.status)) {
+      if (!["ACCEPTED", "NEEDS_CHANGES", "PROOF_SUBMITTED"].includes(ticket.status)) {
         throw new Error("BAD_REQUEST:Ticket is not ready for proof submission");
       }
 
@@ -766,10 +1021,11 @@ export function registerRoutes(app: Express): void {
 
       const checklistAnswers = parseJsonObject(checklistRaw);
       const notes = (req.body.notes as string | undefined) ?? "";
-      const gpsLat = req.body.gps_lat != null ? Number(req.body.gps_lat) : null;
-      const gpsLng = req.body.gps_lng != null ? Number(req.body.gps_lng) : null;
-      const capturedAt = req.body.captured_at ? new Date(req.body.captured_at) : null;
+      let gpsLat = parseOptionalNumberField(req.body.gps_lat, "gps_lat");
+      let gpsLng = parseOptionalNumberField(req.body.gps_lng, "gps_lng");
+      let capturedAt = parseOptionalDateField(req.body.captured_at, "captured_at");
       const submittedAt = new Date();
+      let exifPresent = false;
 
       const policy = getProofPolicy(ticket.proof_policy_json);
       if (files.length < policy.min_photos) {
@@ -785,6 +1041,37 @@ export function registerRoutes(app: Express): void {
         }
       }
 
+      const preparedFiles: Array<{
+        fileKey: string;
+        fileMime: string;
+        fileSize: number;
+        sha256: string;
+      }> = [];
+
+      for (const file of files) {
+        const fileBuffer = fs.readFileSync(file.path);
+        const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+        const exifMeta = extractExifMetadata(fileBuffer);
+
+        exifPresent = exifPresent || exifMeta.hasExif;
+        if (gpsLat == null && exifMeta.gpsLat != null) {
+          gpsLat = exifMeta.gpsLat;
+        }
+        if (gpsLng == null && exifMeta.gpsLng != null) {
+          gpsLng = exifMeta.gpsLng;
+        }
+        if (capturedAt == null && exifMeta.capturedAt != null) {
+          capturedAt = exifMeta.capturedAt;
+        }
+
+        preparedFiles.push({
+          fileKey: path.basename(file.path),
+          fileMime: file.mimetype,
+          fileSize: file.size,
+          sha256
+        });
+      }
+
       const validationFlags = buildValidationFlags({
         ticketLat: ticket.location_lat,
         ticketLng: ticket.location_lng,
@@ -796,7 +1083,8 @@ export function registerRoutes(app: Express): void {
         timeWindowEnd: ticket.time_window_end ? new Date(ticket.time_window_end) : null,
         deadlineAt: new Date(ticket.deadline_at),
         capturedAt,
-        submittedAt
+        submittedAt,
+        exifPresent
       });
 
       const proofResult = await pool.query<DbProof>(
@@ -830,28 +1118,36 @@ export function registerRoutes(app: Express): void {
       const proof = proofResult.rows[0];
 
       const insertedFiles: Array<Record<string, unknown>> = [];
-      for (const file of files) {
-        const fileBuffer = fs.readFileSync(file.path);
-        const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
-
+      for (const file of preparedFiles) {
         const fileResult = await pool.query(
           `
           INSERT INTO proof_files (proof_id, file_key, file_mime, file_size, sha256)
           VALUES ($1,$2,$3,$4,$5)
           RETURNING id, file_key, file_mime, file_size, sha256, created_at
           `,
-          [proof.id, path.basename(file.path), file.mimetype, file.size, sha256]
+          [proof.id, file.fileKey, file.fileMime, file.fileSize, file.sha256]
         );
         insertedFiles.push(fileResult.rows[0]);
       }
 
-      await transitionTicketStatus({
-        ticketId: ticket.id,
-        fromStatus: ticket.status,
-        toStatus: "PROOF_SUBMITTED",
-        actorUserId: req.user!.id,
-        payload: { proof_id: proof.id, validation_flags_json: validationFlags }
-      });
+      if (ticket.status === "PROOF_SUBMITTED") {
+        await writeStatusEvent({
+          ticketId: ticket.id,
+          actorUserId: req.user!.id,
+          fromStatus: ticket.status,
+          toStatus: ticket.status,
+          eventType: "PROOF_ADDED",
+          payload: { proof_id: proof.id, validation_flags_json: validationFlags }
+        });
+      } else {
+        await transitionTicketStatus({
+          ticketId: ticket.id,
+          fromStatus: ticket.status,
+          toStatus: "PROOF_SUBMITTED",
+          actorUserId: req.user!.id,
+          payload: { proof_id: proof.id, validation_flags_json: validationFlags }
+        });
+      }
 
       res.status(201).json({ ...proof, files: insertedFiles });
     })
@@ -875,12 +1171,12 @@ export function registerRoutes(app: Express): void {
         throw new Error("BAD_REQUEST:Ticket not in PROOF_SUBMITTED state");
       }
 
-      let nextTicketStatus: TicketStatus;
+      let nextTicketStatus: TicketStatus | null = null;
       let nextQaStatus: string;
+      const requiredRedundancy = getRequiredRedundancy(ticket.proof_policy_json);
 
       switch (payload.decision) {
         case "APPROVE": {
-          nextTicketStatus = "COMPLETED";
           nextQaStatus = "APPROVED";
           break;
         }
@@ -913,18 +1209,59 @@ export function registerRoutes(app: Express): void {
         [nextQaStatus, req.user!.id, payload.comment, proof.id]
       );
 
-      await transitionTicketStatus({
-        ticketId: ticket.id,
-        fromStatus: ticket.status,
-        toStatus: nextTicketStatus,
-        actorUserId: req.user!.id,
-        eventType: "QA_DECISION",
-        payload: {
-          proof_id: proof.id,
-          decision: payload.decision,
-          comment: payload.comment
+      if (payload.decision === "APPROVE") {
+        const approvedCountResult = await pool.query<{ approved_count: string }>(
+          "SELECT COUNT(*)::text AS approved_count FROM proofs WHERE ticket_id = $1 AND qa_status = 'APPROVED'",
+          [ticket.id]
+        );
+        const approvedCount = Number(approvedCountResult.rows[0]?.approved_count ?? "0");
+
+        if (approvedCount >= requiredRedundancy) {
+          await transitionTicketStatus({
+            ticketId: ticket.id,
+            fromStatus: ticket.status,
+            toStatus: "COMPLETED",
+            actorUserId: req.user!.id,
+            eventType: "QA_DECISION",
+            payload: {
+              proof_id: proof.id,
+              decision: payload.decision,
+              comment: payload.comment,
+              approved_count: approvedCount,
+              redundancy_required: requiredRedundancy
+            }
+          });
+        } else {
+          await writeStatusEvent({
+            ticketId: ticket.id,
+            actorUserId: req.user!.id,
+            fromStatus: ticket.status,
+            toStatus: ticket.status,
+            eventType: "QA_DECISION",
+            payload: {
+              proof_id: proof.id,
+              decision: payload.decision,
+              comment: payload.comment,
+              approved_count: approvedCount,
+              redundancy_required: requiredRedundancy,
+              pending_redundancy: true
+            }
+          });
         }
-      });
+      } else {
+        await transitionTicketStatus({
+          ticketId: ticket.id,
+          fromStatus: ticket.status,
+          toStatus: nextTicketStatus!,
+          actorUserId: req.user!.id,
+          eventType: "QA_DECISION",
+          payload: {
+            proof_id: proof.id,
+            decision: payload.decision,
+            comment: payload.comment
+          }
+        });
+      }
 
       if (payload.decision === "ESCALATE") {
         const escalatedTitle = `[ESCALATION] ${ticket.title}`;
@@ -1037,6 +1374,83 @@ export function registerRoutes(app: Express): void {
           doc.text(`Validation: ${JSON.stringify(proof.validation_flags_json)}`);
           doc.text(`Files: ${proof.files.map((f) => String(f.file_key)).join(", ")}`);
           doc.moveDown(0.5);
+        }
+      }
+
+      doc.end();
+    })
+  );
+
+  app.get(
+    "/reports/project.pdf",
+    authorize("report:read"),
+    asyncHandler(async (req, res) => {
+      const projectId = typeof req.query.project_id === "string" ? req.query.project_id : null;
+      if (!projectId) {
+        throw new Error("BAD_REQUEST:project_id query parameter is required");
+      }
+
+      const projectResult = await pool.query<DbProject>("SELECT * FROM projects WHERE id = $1", [projectId]);
+      const project = projectResult.rows[0];
+      if (!project) {
+        throw new Error("NOT_FOUND:Project not found");
+      }
+      if (req.user!.role === "REQUESTER" && project.owner_user_id !== req.user!.id) {
+        throw new Error("BAD_REQUEST:Project does not belong to requester");
+      }
+
+      const ticketsResult = await pool.query<DbTicket>(
+        "SELECT * FROM tickets WHERE project_id = $1 ORDER BY created_at ASC",
+        [projectId]
+      );
+
+      const ticketIds = ticketsResult.rows.map((ticket) => ticket.id);
+      const proofCounts = new Map<string, number>();
+      if (ticketIds.length > 0) {
+        const proofCountsResult = await pool.query<{ ticket_id: string; proof_count: string }>(
+          `
+          SELECT ticket_id, COUNT(*)::text AS proof_count
+          FROM proofs
+          WHERE ticket_id = ANY($1::uuid[])
+          GROUP BY ticket_id
+          `,
+          [ticketIds]
+        );
+        for (const row of proofCountsResult.rows) {
+          proofCounts.set(row.ticket_id, Number(row.proof_count));
+        }
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename=project-${project.id}-report.pdf`);
+
+      const doc = new PDFDocument({ margin: 36, size: "A4" });
+      doc.pipe(res);
+
+      doc.fontSize(18).text("Projekt Report", { underline: true });
+      doc.moveDown();
+      doc.fontSize(12);
+      doc.text(`Project ID: ${project.id}`);
+      doc.text(`Name: ${project.name}`);
+      doc.text(`Description: ${project.description ?? "-"}`);
+      doc.text(`Created At: ${project.created_at}`);
+      doc.text(`Tickets: ${ticketsResult.rows.length}`);
+      doc.moveDown();
+
+      if (ticketsResult.rows.length === 0) {
+        doc.text("Keine Tickets fuer dieses Projekt.");
+      } else {
+        doc.fontSize(14).text("Ticket Uebersicht", { underline: true });
+        doc.moveDown(0.5);
+        doc.fontSize(10);
+
+        for (const ticket of ticketsResult.rows) {
+          doc.text(
+            `${ticket.title} | Status: ${ticket.status} | Klasse: ${ticket.task_class} | Deadline: ${ticket.deadline_at} | Proofs: ${
+              proofCounts.get(ticket.id) ?? 0
+            }`
+          );
+          doc.moveDown(0.3);
         }
       }
 

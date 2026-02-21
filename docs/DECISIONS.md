@@ -30,7 +30,7 @@ Datum: 2026-02-21
 
 7. QA Queue API
 - Unklarheit: OpenAPI hat kein dediziertes QA-Queue Endpoint.
-- Entscheidung: QA Queue wird ueber `GET /tickets?status=PROOF_SUBMITTED` aufgebaut.
+- Entscheidung: initial ueber `GET /tickets?status=PROOF_SUBMITTED`; spaeter ersetzt durch dedizierten Endpoint `GET /qa/queue` (siehe Entscheidung 12).
 
 8. Admin-Minimum
 - Unklarheit: UI-Flow fordert Admin-User-Rollenpflege, OpenAPI listet keine Admin-Endpunkte.
@@ -52,3 +52,34 @@ Datum: 2026-02-21
 11. Template 3 Klassenwahl
 - Unklarheit: Vorlage 3 ist in `06_TASK_TEMPLATES.md` als Klasse 2/3 Kontext beschrieben.
 - Entscheidung: Seed defaultet auf Klasse `3` (konservativ/fachkraftpflichtig).
+
+12. QA Queue Darstellung
+- Unklarheit: UI-Flow fordert QA Queue als Proof-Liste mit Flag-Filtern, bestehende API war ticket-zentriert.
+- Entscheidung: Neuer Endpunkt `GET /qa/queue?flag=...` liefert pending Proofs mit `geo_fail`, `time_fail`, `exif_missing` Filtern.
+
+13. Projekt-Report Erzeugung
+- Unklarheit: PRD fordert Projekt-Export, vorhandene API hatte nur Ticket-PDF.
+- Entscheidung: Neuer Endpunkt `GET /reports/project.pdf?project_id=...`; Requester duerfen nur eigene Projekte exportieren.
+
+14. Projekt-Basis API
+- Unklarheit: Fuer Projekt-Filter und Projekt-Report fehlte ein einfacher Create/List-Flow.
+- Entscheidung: Minimal ergaenzt um `GET /projects` und `POST /projects`, plus Demo-Projekt-Seed fuer requester.
+
+15. Proof Viewer Dateizugriff
+- Unklarheit: Q-02 verlangt Foto-Ansicht, aber es gab keinen Download-Endpoint fuer gespeicherte Proof-Dateien.
+- Entscheidung: Neuer geschuetzter QA-Endpoint `GET /proofs/{proofId}/files/{fileId}` streamt Bilder inline mit DB-MIME-Type.
+
+16. EXIF-Fallback beim Proof Upload
+- Unklarheit: PRD fordert EXIF-Extraction, aber Upload erlaubte nur manuelle Felder.
+- Entscheidung: EXIF wird pro hochgeladenem Bild gelesen; fehlende `gps_lat`, `gps_lng`, `captured_at` werden aus EXIF aufgefuellt.
+- Default: EXIF-Zeitstempel ohne explizite Zeitzone werden als UTC interpretiert.
+- Folge: `validation_flags_json.exif_present` basiert auf real gefundenen EXIF-Daten, nicht auf manuell gesetztem `captured_at`.
+
+17. Redundanz im bestehenden Lifecycle
+- Unklarheit: PRD nennt optional Redundanz, Statusmodell hat aber keinen separaten Sammelstatus.
+- Entscheidung: `proof_policy_json.redundancy` wird als Mindestanzahl `APPROVED`-Proofs (integer, min 1) ausgewertet; Ticket bleibt bis Erreichen in `PROOF_SUBMITTED`.
+- Folge: Zusaeztliche Proof-Uploads sind in `PROOF_SUBMITTED` erlaubt, damit Redundanz ohne Statusbruch erfuellt werden kann.
+
+18. Karten-Preview im MVP
+- Unklarheit: UI-Flow fordert Kartenansichten, ohne feste Kartenbibliothek im Tech-Stack.
+- Entscheidung: Karte wird als leichte Static-Map-Preview (OpenStreetMap Static Map) in Requester/Worker/QA Screens gerendert.

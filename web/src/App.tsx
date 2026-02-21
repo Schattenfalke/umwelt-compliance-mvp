@@ -1,13 +1,18 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptTicket,
+  createProject,
   createTemplate,
   createTicket,
   deleteTemplate,
   decodeJwt,
+  downloadProofFile,
+  downloadProjectReport,
   downloadReport,
   getAdminMetrics,
   getTicketDetail,
+  listProjects,
+  listQaQueue,
   listTickets,
   listTemplates,
   listUsers,
@@ -19,7 +24,7 @@ import {
   updateTemplate,
   updateUserRole
 } from "./api";
-import { AdminMetrics, AdminUser, Role, Ticket, TicketDetail, TicketTemplate } from "./types";
+import { AdminMetrics, AdminUser, Project, QaQueueEntry, Role, Ticket, TicketDetail, TicketTemplate } from "./types";
 
 type View = "tickets" | "feed" | "qa" | "admin";
 
@@ -63,6 +68,11 @@ const defaultTemplateForm = {
   default_geofence_radius_m: "25"
 };
 
+const defaultProjectForm = {
+  name: "",
+  description: ""
+};
+
 function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "-";
@@ -82,6 +92,50 @@ function formatPercent(value: number | null): string {
     return "-";
   }
   return `${(value * 100).toFixed(1)} %`;
+}
+
+function parseCoordinate(value: string): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function buildStaticMapUrl(params: {
+  centerLat: number;
+  centerLng: number;
+  markers: Array<{ lat: number; lng: number; color: "red" | "blue" }>;
+  zoom?: number;
+  width?: number;
+  height?: number;
+}): string {
+  const markerString = params.markers
+    .map((marker) => `${marker.lat.toFixed(6)},${marker.lng.toFixed(6)},${marker.color}`)
+    .join("|");
+
+  const search = new URLSearchParams({
+    center: `${params.centerLat.toFixed(6)},${params.centerLng.toFixed(6)}`,
+    zoom: String(params.zoom ?? 14),
+    size: `${params.width ?? 640}x${params.height ?? 320}`,
+    markers: markerString
+  });
+
+  return `https://staticmap.openstreetmap.de/staticmap.php?${search.toString()}`;
+}
+
+function buildProofMapUrl(lat: number | null, lng: number | null): string | null {
+  if (lat == null || lng == null) {
+    return null;
+  }
+  return buildStaticMapUrl({
+    centerLat: lat,
+    centerLng: lng,
+    markers: [{ lat, lng, color: "red" }],
+    zoom: 16,
+    width: 520,
+    height: 220
+  });
 }
 
 function App() {
@@ -114,8 +168,51 @@ function App() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [templateForm, setTemplateForm] = useState(defaultTemplateForm);
   const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectForm, setProjectForm] = useState(defaultProjectForm);
+  const [ticketProjectFilter, setTicketProjectFilter] = useState<string>("");
+  const [ticketProjectId, setTicketProjectId] = useState<string>("");
+  const [qaFlagFilter, setQaFlagFilter] = useState<"all" | "geo_fail" | "time_fail" | "exif_missing">("all");
+  const [qaQueueEntries, setQaQueueEntries] = useState<QaQueueEntry[]>([]);
+  const [proofImageUrls, setProofImageUrls] = useState<Record<string, string>>({});
 
   const selectedTicket = useMemo(() => tickets.find((t) => t.id === selectedTicketId) ?? null, [tickets, selectedTicketId]);
+  const createTicketMapUrl = useMemo(() => {
+    const lat = parseCoordinate(createTicketForm.location_lat);
+    const lng = parseCoordinate(createTicketForm.location_lng);
+    if (lat == null || lng == null) {
+      return null;
+    }
+    return buildStaticMapUrl({
+      centerLat: lat,
+      centerLng: lng,
+      markers: [{ lat, lng, color: "red" }],
+      zoom: 16,
+      width: 640,
+      height: 250
+    });
+  }, [createTicketForm.location_lat, createTicketForm.location_lng]);
+  const workerMapUrl = useMemo(() => {
+    const lat = parseCoordinate(workerLat);
+    const lng = parseCoordinate(workerLng);
+    if (lat == null || lng == null) {
+      return null;
+    }
+
+    const ticketMarkers = tickets
+      .slice(0, 20)
+      .filter((ticket) => Number.isFinite(ticket.location_lat) && Number.isFinite(ticket.location_lng))
+      .map((ticket) => ({ lat: ticket.location_lat, lng: ticket.location_lng, color: "red" as const }));
+
+    return buildStaticMapUrl({
+      centerLat: lat,
+      centerLng: lng,
+      markers: [{ lat, lng, color: "blue" }, ...ticketMarkers],
+      zoom: 13,
+      width: 640,
+      height: 280
+    });
+  }, [workerLat, workerLng, tickets]);
 
   const setSession = (jwt: string) => {
     const decoded = decodeJwt(jwt);
@@ -144,16 +241,21 @@ function App() {
       return;
     }
 
-    let params: Record<string, string | number> | undefined;
     if (view === "qa") {
-      params = { status: "PROOF_SUBMITTED" };
+      setTickets([]);
+      return;
     }
+
+    let params: Record<string, string | number> | undefined;
     if (view === "feed") {
       params = {
         near_lat: workerLat,
         near_lng: workerLng,
         near_radius_km: workerRadius
       };
+    }
+    if (view === "tickets" && ticketProjectFilter) {
+      params = { project_id: ticketProjectFilter };
     }
 
     const data = await listTickets(token, params);
@@ -163,7 +265,7 @@ function App() {
       setSelectedTicketId("");
       setTicketDetail(null);
     }
-  }, [token, userRole, view, workerLat, workerLng, workerRadius, selectedTicketId]);
+  }, [token, userRole, view, workerLat, workerLng, workerRadius, selectedTicketId, ticketProjectFilter]);
 
   const loadTicketDetail = useCallback(
     async (ticketId: string) => {
@@ -200,6 +302,23 @@ function App() {
     setAdminMetrics(metrics);
   }, [token, userRole]);
 
+  const loadProjects = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    const data = await listProjects(token);
+    setProjects(data);
+  }, [token]);
+
+  const loadQaQueue = useCallback(async () => {
+    if (!token || userRole !== "QA") {
+      setQaQueueEntries([]);
+      return;
+    }
+    const entries = await listQaQueue(token, qaFlagFilter);
+    setQaQueueEntries(entries);
+  }, [token, userRole, qaFlagFilter]);
+
   useEffect(() => {
     if (!token) {
       return;
@@ -208,10 +327,10 @@ function App() {
     resetMessages();
     setLoading(true);
 
-    Promise.all([loadTickets(), loadAdminUsers(), loadTemplates(), loadAdminMetrics()])
+    Promise.all([loadTickets(), loadAdminUsers(), loadTemplates(), loadAdminMetrics(), loadProjects(), loadQaQueue()])
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [token, view, reloadToken, loadTickets, loadAdminUsers, loadTemplates, loadAdminMetrics]);
+  }, [token, view, reloadToken, loadTickets, loadAdminUsers, loadTemplates, loadAdminMetrics, loadProjects, loadQaQueue]);
 
   useEffect(() => {
     if (!selectedTicketId) {
@@ -220,6 +339,72 @@ function App() {
     }
     loadTicketDetail(selectedTicketId).catch((err) => setError(err.message));
   }, [selectedTicketId, reloadToken, loadTicketDetail]);
+
+  useEffect(() => {
+    let active = true;
+    const localUrls: string[] = [];
+
+    const revokeCurrent = () => {
+      setProofImageUrls((current) => {
+        Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+        return {};
+      });
+    };
+
+    if (view !== "qa" || userRole !== "QA" || !token || !ticketDetail) {
+      revokeCurrent();
+      return;
+    }
+
+    const files = ticketDetail.proofs.flatMap((proof) =>
+      (proof.files ?? []).map((file) => ({
+        proofId: proof.id,
+        fileId: file.id
+      }))
+    );
+
+    if (files.length === 0) {
+      revokeCurrent();
+      return;
+    }
+
+    const loadImages = async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        files.map(async (fileRef) => {
+          try {
+            const blob = await downloadProofFile(token, fileRef.proofId, fileRef.fileId);
+            const objectUrl = URL.createObjectURL(blob);
+            localUrls.push(objectUrl);
+            next[fileRef.fileId] = objectUrl;
+          } catch (_error) {
+            // Intentionally ignore single-file failures to keep the review usable.
+          }
+        })
+      );
+
+      if (!active) {
+        localUrls.forEach((url) => URL.revokeObjectURL(url));
+        return;
+      }
+
+      setProofImageUrls((current) => {
+        Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+        return next;
+      });
+    };
+
+    loadImages().catch((err) => {
+      if (active) {
+        setError((err as Error).message);
+      }
+    });
+
+    return () => {
+      active = false;
+      localUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [view, userRole, token, ticketDetail, reloadToken]);
 
   const onLogin = async (event: FormEvent) => {
     event.preventDefault();
@@ -248,6 +433,7 @@ function App() {
 
     try {
       await createTicket(token, {
+        project_id: ticketProjectId || null,
         template_id: selectedTemplateId || null,
         title: createTicketForm.title,
         description: createTicketForm.description,
@@ -391,6 +577,48 @@ function App() {
     }
   };
 
+  const onDownloadProjectReport = async () => {
+    if (!token || !ticketProjectFilter) {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      const blob = await downloadProjectReport(token, ticketProjectFilter);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setMessage("Projekt-Report geoeffnet.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onCreateProject = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      await createProject(token, {
+        name: projectForm.name,
+        description: projectForm.description
+      });
+      setProjectForm(defaultProjectForm);
+      setMessage("Projekt erstellt.");
+      setReloadToken((v) => v + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const onUpdateUserRole = async (userId: string, role: Role) => {
     if (!token) {
       return;
@@ -494,6 +722,7 @@ function App() {
   };
 
   const logout = () => {
+    Object.values(proofImageUrls).forEach((url) => URL.revokeObjectURL(url));
     setToken("");
     setUserRole(null);
     setUserEmail("");
@@ -505,6 +734,13 @@ function App() {
     setSelectedTemplateId("");
     setTemplateForm(defaultTemplateForm);
     setAdminMetrics(null);
+    setProjects([]);
+    setProjectForm(defaultProjectForm);
+    setTicketProjectFilter("");
+    setTicketProjectId("");
+    setQaQueueEntries([]);
+    setQaFlagFilter("all");
+    setProofImageUrls({});
   };
 
   if (!token || !userRole) {
@@ -593,6 +829,25 @@ function App() {
         <section className="grid-two">
           <article className="card">
             <h3>R-01 Ticket Liste</h3>
+            <div className="inline-fields">
+              <label>
+                Projektfilter
+                <select value={ticketProjectFilter} onChange={(e) => setTicketProjectFilter(e.target.value)}>
+                  <option value="">- alle Projekte -</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" onClick={() => setReloadToken((v) => v + 1)}>
+                Filter anwenden
+              </button>
+              <button type="button" onClick={onDownloadProjectReport} disabled={!ticketProjectFilter}>
+                Projekt-Report (PDF)
+              </button>
+            </div>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -626,6 +881,17 @@ function App() {
           <article className="card">
             <h3>R-02 Neues Ticket</h3>
             <form onSubmit={onCreateTicket} className="form-grid">
+              <label>
+                Projekt (optional)
+                <select value={ticketProjectId} onChange={(e) => setTicketProjectId(e.target.value)}>
+                  <option value="">- ohne Projekt -</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Template (optional)
                 <select value={selectedTemplateId} onChange={(e) => setSelectedTemplateId(e.target.value)}>
@@ -694,6 +960,12 @@ function App() {
                   required
                 />
               </label>
+              {createTicketMapUrl && (
+                <div className="map-block">
+                  <p className="map-caption">Standort-Vorschau (R-02)</p>
+                  <img src={createTicketMapUrl} alt="Ticket-Standort auf Karte" className="map-image" />
+                </div>
+              )}
               <label>
                 Geofence Radius (m)
                 <input
@@ -746,6 +1018,28 @@ function App() {
               </label>
               <button type="submit" disabled={loading}>
                 Ticket erstellen
+              </button>
+            </form>
+
+            <h4>Projekt anlegen</h4>
+            <form onSubmit={onCreateProject} className="form-grid">
+              <label>
+                Projektname
+                <input
+                  value={projectForm.name}
+                  onChange={(e) => setProjectForm((v) => ({ ...v, name: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Beschreibung
+                <textarea
+                  value={projectForm.description}
+                  onChange={(e) => setProjectForm((v) => ({ ...v, description: e.target.value }))}
+                />
+              </label>
+              <button type="submit" disabled={loading}>
+                Projekt speichern
               </button>
             </form>
           </article>
@@ -801,6 +1095,12 @@ function App() {
               </label>
               <button onClick={() => setReloadToken((v) => v + 1)}>Feed laden</button>
             </div>
+            {workerMapUrl && (
+              <div className="map-block">
+                <p className="map-caption">W-01 Karte (blau = Worker, rot = Missionen)</p>
+                <img src={workerMapUrl} alt="Mission Feed Karte mit Worker und Tickets" className="map-image" />
+              </div>
+            )}
             <ul className="list">
               {tickets.map((ticket) => (
                 <li key={ticket.id} onClick={() => setSelectedTicketId(ticket.id)} className={ticket.id === selectedTicketId ? "active" : ""}>
@@ -826,7 +1126,9 @@ function App() {
 
                 {selectedTicket.status === "PUBLISHED" && <button onClick={onAccept}>Annehmen</button>}
 
-                {(selectedTicket.status === "ACCEPTED" || selectedTicket.status === "NEEDS_CHANGES") && (
+                {(selectedTicket.status === "ACCEPTED" ||
+                  selectedTicket.status === "NEEDS_CHANGES" ||
+                  selectedTicket.status === "PROOF_SUBMITTED") && (
                   <form onSubmit={onSubmitProof} className="form-grid">
                     <label>
                       Notes
@@ -895,13 +1197,35 @@ function App() {
         <section className="grid-two">
           <article className="card">
             <h3>Q-01 QA Queue</h3>
+            <label>
+              Flag-Filter
+              <select
+                value={qaFlagFilter}
+                onChange={(e) => {
+                  setQaFlagFilter(e.target.value as "all" | "geo_fail" | "time_fail" | "exif_missing");
+                  setReloadToken((v) => v + 1);
+                }}
+              >
+                <option value="all">Alle</option>
+                <option value="geo_fail">geo_fail</option>
+                <option value="time_fail">time_fail</option>
+                <option value="exif_missing">exif_missing</option>
+              </select>
+            </label>
             <ul className="list">
-              {tickets.map((ticket) => (
-                <li key={ticket.id} onClick={() => setSelectedTicketId(ticket.id)} className={ticket.id === selectedTicketId ? "active" : ""}>
-                  <strong>{ticket.title}</strong> | {ticket.category} | {formatDate(ticket.updated_at)}
+              {qaQueueEntries.map((entry) => (
+                <li
+                  key={entry.proof_id}
+                  onClick={() => setSelectedTicketId(entry.ticket_id)}
+                  className={entry.ticket_id === selectedTicketId ? "active" : ""}
+                >
+                  <strong>{entry.ticket_title}</strong> | {entry.category} | {formatDate(entry.submitted_at)}
+                  <br />
+                  Proof: {entry.proof_id} | Worker: {entry.submitted_by_user_id}
                 </li>
               ))}
             </ul>
+            {qaQueueEntries.length === 0 && <p>Keine Proofs in der Queue.</p>}
           </article>
           <article className="card">
             <h3>Q-02 QA Review</h3>
@@ -924,13 +1248,52 @@ function App() {
                       <strong>Checkliste:</strong> {JSON.stringify(proof.checklist_answers_json)}
                     </p>
                     <p>
-                      <strong>Fotos:</strong> {proof.files?.map((file) => file.file_key).join(", ") || "-"}
+                      <strong>Captured:</strong> {formatDate(proof.captured_at)}
                     </p>
+                    <p>
+                      <strong>GPS:</strong> {proof.gps_lat ?? "-"}, {proof.gps_lng ?? "-"}
+                    </p>
+                    <div className="proof-media-grid">
+                      {(proof.files ?? []).map((file) => (
+                        <figure key={file.id} className="proof-image">
+                          {proofImageUrls[file.id] ? (
+                            <img src={proofImageUrls[file.id]} alt={`Proof Datei ${file.file_key}`} className="proof-thumb" />
+                          ) : (
+                            <div className="proof-thumb loading">Bild wird geladen...</div>
+                          )}
+                          <figcaption>{file.file_key}</figcaption>
+                        </figure>
+                      ))}
+                      {(proof.files ?? []).length === 0 && <p>Keine Fotos vorhanden.</p>}
+                    </div>
+                    {buildProofMapUrl(proof.gps_lat, proof.gps_lng) ? (
+                      <div className="map-block">
+                        <p className="map-caption">Map Preview</p>
+                        <img
+                          src={buildProofMapUrl(proof.gps_lat, proof.gps_lng)!}
+                          alt="Proof-Position auf Karte"
+                          className="map-image"
+                        />
+                      </div>
+                    ) : (
+                      <p>Map Preview: GPS fehlt.</p>
+                    )}
                     <div className="button-row">
-                      <button onClick={() => onQaDecision("APPROVE", proof.id)}>Approve</button>
-                      <button onClick={() => onQaDecision("REQUEST_CHANGES", proof.id)}>Request Changes</button>
-                      <button onClick={() => onQaDecision("REJECT", proof.id)}>Reject</button>
-                      <button onClick={() => onQaDecision("ESCALATE", proof.id)}>Escalate</button>
+                      <button onClick={() => onQaDecision("APPROVE", proof.id)} disabled={proof.qa_status !== "PENDING"}>
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => onQaDecision("REQUEST_CHANGES", proof.id)}
+                        disabled={proof.qa_status !== "PENDING"}
+                      >
+                        Request Changes
+                      </button>
+                      <button onClick={() => onQaDecision("REJECT", proof.id)} disabled={proof.qa_status !== "PENDING"}>
+                        Reject
+                      </button>
+                      <button onClick={() => onQaDecision("ESCALATE", proof.id)} disabled={proof.qa_status !== "PENDING"}>
+                        Escalate
+                      </button>
                     </div>
                   </div>
                 ))}

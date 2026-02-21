@@ -68,6 +68,7 @@ export function buildValidationFlags(params: {
   deadlineAt: Date;
   capturedAt: Date | null;
   submittedAt: Date;
+  exifPresent?: boolean;
 }): ValidationFlags {
   return {
     geofence_ok: validateGeofence({
@@ -85,6 +86,6 @@ export function buildValidationFlags(params: {
       capturedAt: params.capturedAt,
       submittedAt: params.submittedAt
     }),
-    exif_present: params.capturedAt != null
+    exif_present: params.exifPresent ?? params.capturedAt != null
   };
 }

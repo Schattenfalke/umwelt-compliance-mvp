@@ -106,3 +106,26 @@ export async function ensureDemoTemplates(): Promise<void> {
     );
   }
 }
+
+export async function ensureDemoProjects(): Promise<void> {
+  const requester = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1", ["requester@example.com"]);
+  const requesterId = requester.rows[0]?.id;
+  if (!requesterId) {
+    return;
+  }
+
+  await pool.query(
+    `
+    INSERT INTO projects (owner_user_id, name, description)
+    SELECT $1, $2, $3
+    WHERE NOT EXISTS (
+      SELECT 1 FROM projects WHERE owner_user_id = $1 AND name = $2
+    )
+    `,
+    [
+      requesterId,
+      "Demo Projekt Umweltmonitoring",
+      "Vorseed fuer Projekt-Filter und Projekt-Report im MVP"
+    ]
+  );
+}

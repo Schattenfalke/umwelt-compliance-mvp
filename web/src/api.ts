@@ -1,4 +1,4 @@
-import { AdminMetrics, AdminUser, Ticket, TicketDetail, TicketTemplate } from "./types";
+import { AdminMetrics, AdminUser, Project, QaQueueEntry, Ticket, TicketDetail, TicketTemplate } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -140,8 +140,46 @@ export async function qaDecision(
   });
 }
 
+export async function downloadProofFile(token: string, proofId: string, fileId: string): Promise<Blob> {
+  const response = await fetch(`${API_URL}/proofs/${proofId}/files/${fileId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(body.error ?? `HTTP ${response.status}`);
+  }
+
+  return response.blob();
+}
+
 export async function downloadReport(token: string, ticketId: string): Promise<Blob> {
   return request(`/tickets/${ticketId}/report.pdf`, { token });
+}
+
+export async function downloadProjectReport(token: string, projectId: string): Promise<Blob> {
+  return request(`/reports/project.pdf?${new URLSearchParams({ project_id: projectId }).toString()}`, { token });
+}
+
+export async function listProjects(token: string): Promise<Project[]> {
+  return request("/projects", { token });
+}
+
+export async function createProject(
+  token: string,
+  payload: { name: string; description: string }
+): Promise<Project> {
+  return request("/projects", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function listQaQueue(token: string, flag: "all" | "geo_fail" | "time_fail" | "exif_missing"): Promise<QaQueueEntry[]> {
+  return request(`/qa/queue?${new URLSearchParams({ flag }).toString()}`, { token });
 }
 
 export async function listUsers(token: string): Promise<AdminUser[]> {

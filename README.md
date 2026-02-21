@@ -94,12 +94,42 @@ Demo-Zugaenge:
 
 ---
 
-## Sprint-3 Features
+## Durchgefuehrte Sprints
 
+### Sprint 0 (abgeschlossen)
+- DB-Schema aus `docs/03A_schema.sql` als Init-Setup integriert
+- Docker-Setup fuer Postgres, API und Web aufgebaut
+- Auth-Flow (Demo-Login) sowie RBAC-Grundlage umgesetzt
+- Status-Machine, Geo/Time-Kernlogik und Core-Tests eingerichtet
+
+### Sprint 1 (abgeschlossen)
+- Ticket-Flow umgesetzt: Create, Qualify, Publish, Accept
+- Worker-Mission-Feed mit Distanzfilter bereitgestellt
+- 1-aktives-Ticket-Policy fuer Worker aktiv
+- UI fuer Requester/Worker-Basisablauf implementiert
+
+### Sprint 2 (abgeschlossen)
+- Proof-Upload mit Pflichtfeldern, GPS/Zeit-Validierung und File-Metadaten umgesetzt
+- QA-Review-Flow umgesetzt (Approve, Request Changes, Reject, Escalate)
+- Audit-Trail fuer Status- und QA-Events persistiert
+- Ticket-PDF-Report (`/tickets/{ticketId}/report.pdf`) umgesetzt
+
+### Sprint 3 (abgeschlossen)
 - Upload-Rate-Limit fuer Proofs (konfigurierbar ueber `PROOF_UPLOAD_RATE_LIMIT_*`)
-- Admin KPIs unter `GET /admin/metrics`
-- Template API unter `GET/POST/PATCH/DELETE /templates`
-- Requester kann Tickets optional aus Templates erstellen (`template_id`)
+- Admin-KPI-Snapshot (`GET /admin/metrics`) umgesetzt
+- Template-API (`GET/POST/PATCH/DELETE /templates`) umgesetzt
+- Template-Nutzung im Ticket-Create-Flow (`template_id`) integriert
+- Admin-UI fuer KPI-Snapshot und Template-Verwaltung erweitert
+- QA-Queue-Filter (`geo_fail`, `time_fail`, `exif_missing`) auf Proof-Ebene integriert
+- Projekt-Basisflow (`GET/POST /projects`) und Projekt-PDF-Report (`GET /reports/project.pdf`) ergaenzt
+
+### Sprint 4 (abgeschlossen)
+- EXIF-Extraction beim Proof-Upload umgesetzt (GPS/Capture-Time Fallback aus Bildmetadaten)
+- Redundanz-Policy (`proof_policy_json.redundancy`) fuer QA-Approve-Flow durchgesetzt
+- Zusaeztliche Proof-Uploads in `PROOF_SUBMITTED` fuer Redundanz-Faelle ermoeglicht
+- QA Proof Viewer erweitert: echte Bildanzeige, Metadaten und Map-Preview
+- API-Endpunkt fuer Proof-Dateistreaming (`GET /proofs/{proofId}/files/{fileId}`) hinzugefuegt
+- Worker Mission Feed und Requester Ticket-Create um Karten-Preview erweitert
 
 ---
 
@@ -118,16 +148,17 @@ Regelmaessige Fotodokumentation an definierten Geo-Punkten (alle 14 Tage):
 
 | Phase | Zeitraum | Fokus |
 |-------|----------|-------|
-| Sprint 0 | Woche 1 | Docker, Schema, Auth, Grundgeruest |
-| Sprint 1 | Woche 2-3 | Ticketing, Feed, Annahme |
-| Sprint 2 | Woche 4-5 | Proof Upload, QA Review, PDF Report |
-| Sprint 3 | Woche 6-8 | Pilot-Betrieb, KPIs, Hardening |
+| Sprint 0 | abgeschlossen | Docker, Schema, Auth, RBAC |
+| Sprint 1 | abgeschlossen | Ticketing, Feed, Annahme |
+| Sprint 2 | abgeschlossen | Proof Upload, QA Review, PDF Report |
+| Sprint 3 | abgeschlossen | KPIs, Templates, Hardening-Bausteine |
+| Sprint 4 | abgeschlossen | EXIF, Redundanz, QA Viewer, Karten-Previews |
 
 ---
 
 ## Status
 
-MVP in Entwicklung.
+MVP ist funktionsfaehig umgesetzt (Sprints 0 bis 4).
 
 ---
 

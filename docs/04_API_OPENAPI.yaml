@@ -27,6 +27,30 @@ paths:
                 type: object
                 properties:
                   access_token: { type: string }
+  /projects:
+    get:
+      summary: List projects
+      responses:
+        "200":
+          description: project list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Project' }
+    post:
+      summary: Create project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectCreate' }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
   /admin/metrics:
     get:
       summary: KPI snapshot for pilot monitoring (admin)
@@ -96,6 +120,9 @@ paths:
         - in: query
           name: status
           schema: { type: string }
+        - in: query
+          name: project_id
+          schema: { type: string, format: uuid }
         - in: query
           name: near_lat
           schema: { type: number }
@@ -193,7 +220,7 @@ paths:
               schema: { $ref: '#/components/schemas/Ticket' }
   /tickets/{ticketId}/proofs:
     post:
-      summary: Submit proof for ticket
+      summary: Submit proof for ticket (ACCEPTED, NEEDS_CHANGES, or additional proof while PROOF_SUBMITTED)
       parameters:
         - in: path
           name: ticketId
@@ -248,6 +275,51 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Proof' }
+  /proofs/{proofId}/files/{fileId}:
+    get:
+      summary: Stream proof image file for QA review
+      parameters:
+        - in: path
+          name: proofId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: binary image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+  /qa/queue:
+    get:
+      summary: QA queue of pending proofs with optional validation-flag filters
+      parameters:
+        - in: query
+          name: flag
+          schema:
+            type: string
+            enum: [all, geo_fail, time_fail, exif_missing]
+      responses:
+        "200":
+          description: qa queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/QaQueueEntry' }
   /tickets/{ticketId}/report.pdf:
     get:
       summary: Download ticket report PDF
@@ -264,9 +336,39 @@ paths:
               schema:
                 type: string
                 format: binary
+  /reports/project.pdf:
+    get:
+      summary: Download project report PDF
+      parameters:
+        - in: query
+          name: project_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: pdf
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
 
 components:
   schemas:
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        owner_user_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    ProjectCreate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+      required: [name]
     Ticket:
       type: object
       properties:
@@ -353,6 +455,18 @@ components:
         checklist_answers_json: { type: object }
         notes: { type: string }
         qa_status: { type: string }
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/ProofFile' }
+    ProofFile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        file_key: { type: string }
+        file_mime: { type: string }
+        file_size: { type: integer }
+        sha256: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
     AdminMetrics:
       type: object
       properties:
@@ -370,3 +484,14 @@ components:
             first_pass_proof_complete_rate: { type: number, nullable: true }
             avg_qa_cycle_seconds: { type: number, nullable: true }
             change_request_rate: { type: number, nullable: true }
+    QaQueueEntry:
+      type: object
+      properties:
+        proof_id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        ticket_title: { type: string }
+        category: { type: string }
+        submitted_by_user_id: { type: string, format: uuid }
+        submitted_at: { type: string, format: date-time }
+        validation_flags_json: { type: object }
+        qa_status: { type: string }
