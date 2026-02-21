@@ -27,6 +27,68 @@ paths:
                 type: object
                 properties:
                   access_token: { type: string }
+  /admin/metrics:
+    get:
+      summary: KPI snapshot for pilot monitoring (admin)
+      responses:
+        "200":
+          description: metrics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMetrics' }
+  /templates:
+    get:
+      summary: List ticket templates
+      responses:
+        "200":
+          description: template list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TicketTemplate' }
+    post:
+      summary: Create ticket template (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketTemplateCreate' }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketTemplate' }
+  /templates/{templateId}:
+    patch:
+      summary: Update ticket template (admin)
+      parameters:
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketTemplateUpdate' }
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketTemplate' }
+    delete:
+      summary: Delete ticket template (admin)
+      parameters:
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: deleted
   /tickets:
     get:
       summary: List tickets (filters)
@@ -222,19 +284,50 @@ components:
       type: object
       properties:
         project_id: { type: string, format: uuid, nullable: true }
+        template_id: { type: string, format: uuid, nullable: true }
         title: { type: string }
         description: { type: string }
-        category: { type: string }
-        task_class: { type: integer, enum: [1,2,3] }
+        category: { type: string, nullable: true }
+        task_class: { type: integer, enum: [1,2,3], nullable: true }
         location_lat: { type: number }
         location_lng: { type: number }
-        geofence_radius_m: { type: integer }
+        geofence_radius_m: { type: integer, nullable: true }
         time_window_start: { type: string, format: date-time, nullable: true }
         time_window_end: { type: string, format: date-time, nullable: true }
         deadline_at: { type: string, format: date-time }
-        proof_policy_json: { type: object }
+        proof_policy_json: { type: object, nullable: true }
         safety_flags_json: { type: object }
-      required: [title, category, task_class, location_lat, location_lng, geofence_radius_m, deadline_at]
+      required: [title, location_lat, location_lng, deadline_at]
+    TicketTemplate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        task_class: { type: integer, enum: [1,2,3] }
+        checklist_json: { type: object }
+        proof_policy_json: { type: object }
+        default_geofence_radius_m: { type: integer }
+        created_at: { type: string, format: date-time }
+    TicketTemplateCreate:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        task_class: { type: integer, enum: [1,2,3] }
+        checklist_json: { type: object }
+        proof_policy_json: { type: object }
+        default_geofence_radius_m: { type: integer }
+      required: [name, category, task_class]
+    TicketTemplateUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        task_class: { type: integer, enum: [1,2,3] }
+        checklist_json: { type: object }
+        proof_policy_json: { type: object }
+        default_geofence_radius_m: { type: integer }
     TicketDetail:
       allOf:
         - $ref: '#/components/schemas/Ticket'
@@ -260,3 +353,20 @@ components:
         checklist_answers_json: { type: object }
         notes: { type: string }
         qa_status: { type: string }
+    AdminMetrics:
+      type: object
+      properties:
+        generated_at: { type: string, format: date-time }
+        totals:
+          type: object
+          properties:
+            tickets: { type: integer }
+            proofs: { type: integer }
+            qa_decided_proofs: { type: integer }
+        kpis:
+          type: object
+          properties:
+            median_ticket_to_accepted_seconds: { type: number, nullable: true }
+            first_pass_proof_complete_rate: { type: number, nullable: true }
+            avg_qa_cycle_seconds: { type: number, nullable: true }
+            change_request_rate: { type: number, nullable: true }

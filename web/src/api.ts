@@ -1,4 +1,4 @@
-import { AdminUser, Ticket, TicketDetail } from "./types";
+import { AdminMetrics, AdminUser, Ticket, TicketDetail, TicketTemplate } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -29,7 +29,16 @@ async function request<T>(path: string, init: RequestInitExt = {}): Promise<T> {
     return (await response.blob()) as T;
   }
 
-  return (await response.json()) as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text) as T;
 }
 
 export async function login(email: string, password: string): Promise<{ access_token: string }> {
@@ -145,6 +154,58 @@ export async function updateUserRole(token: string, userId: string, role: string
     token,
     body: JSON.stringify({ role })
   });
+}
+
+export async function listTemplates(token: string): Promise<TicketTemplate[]> {
+  return request("/templates", { token });
+}
+
+export async function createTemplate(
+  token: string,
+  payload: {
+    name: string;
+    category: string;
+    task_class: number;
+    checklist_json: Record<string, unknown>;
+    proof_policy_json: Record<string, unknown>;
+    default_geofence_radius_m: number;
+  }
+): Promise<TicketTemplate> {
+  return request("/templates", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateTemplate(
+  token: string,
+  templateId: string,
+  payload: Partial<{
+    name: string;
+    category: string;
+    task_class: number;
+    checklist_json: Record<string, unknown>;
+    proof_policy_json: Record<string, unknown>;
+    default_geofence_radius_m: number;
+  }>
+): Promise<TicketTemplate> {
+  return request(`/templates/${templateId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteTemplate(token: string, templateId: string): Promise<void> {
+  await request(`/templates/${templateId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
+export async function getAdminMetrics(token: string): Promise<AdminMetrics> {
+  return request("/admin/metrics", { token });
 }
 
 export function decodeJwt(token: string): { id: string; email: string; role: string } {

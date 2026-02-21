@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { haversineDistanceMeters, validateGeofence, validateTimeWindow } from "../src/lib/geoTimeValidation";
 import { canTransition, assertTransition } from "../src/lib/statusMachine";
 import { hasPermission, requirePermission } from "../src/lib/rbac";
+import { checkSlidingWindowRateLimit, clearRateLimitState } from "../src/lib/rateLimit";
 
 function runGeoTimeTests(): void {
   const distance = haversineDistanceMeters(52.52, 13.405, 52.5202, 13.4052);
@@ -73,11 +74,39 @@ function runRbacTests(): void {
   assert.equal(hasPermission("QA", "ticket:qualify"), true);
   assert.equal(hasPermission("QA", "proof:qa"), true);
   assert.equal(hasPermission("ADMIN", "admin:users:read"), true);
+  assert.equal(hasPermission("ADMIN", "admin:metrics:read"), true);
+  assert.equal(hasPermission("REQUESTER", "template:list"), true);
+  assert.equal(hasPermission("REQUESTER", "template:write"), false);
   assert.throws(() => requirePermission("WORKER", "ticket:create"), /FORBIDDEN:ticket:create/);
+}
+
+function runRateLimitTests(): void {
+  clearRateLimitState();
+  const key = "proof-upload:test";
+  const windowSec = 60;
+  const maxRequests = 2;
+  const now = 1_000_000;
+
+  assert.equal(
+    checkSlidingWindowRateLimit({ key, windowSec, maxRequests, nowMs: now }).allowed,
+    true
+  );
+  assert.equal(
+    checkSlidingWindowRateLimit({ key, windowSec, maxRequests, nowMs: now + 1_000 }).allowed,
+    true
+  );
+
+  const limited = checkSlidingWindowRateLimit({ key, windowSec, maxRequests, nowMs: now + 2_000 });
+  assert.equal(limited.allowed, false);
+  assert.ok(limited.retryAfterSec > 0);
+
+  const afterWindow = checkSlidingWindowRateLimit({ key, windowSec, maxRequests, nowMs: now + 61_000 });
+  assert.equal(afterWindow.allowed, true);
 }
 
 runGeoTimeTests();
 runStatusTransitionTests();
 runRbacTests();
+runRateLimitTests();
 
 console.log("All core logic tests passed.");

@@ -87,3 +87,29 @@ export type AdminUser = {
   is_verified: boolean;
   created_at: string;
 };
+
+export type TicketTemplate = {
+  id: string;
+  name: string;
+  category: string;
+  task_class: number;
+  checklist_json: Record<string, unknown>;
+  proof_policy_json: Record<string, unknown>;
+  default_geofence_radius_m: number;
+  created_at: string;
+};
+
+export type AdminMetrics = {
+  generated_at: string;
+  totals: {
+    tickets: number;
+    proofs: number;
+    qa_decided_proofs: number;
+  };
+  kpis: {
+    median_ticket_to_accepted_seconds: number | null;
+    first_pass_proof_complete_rate: number | null;
+    avg_qa_cycle_seconds: number | null;
+    change_request_rate: number | null;
+  };
+};

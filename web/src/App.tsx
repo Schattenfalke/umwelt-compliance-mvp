@@ -1,20 +1,25 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptTicket,
+  createTemplate,
   createTicket,
+  deleteTemplate,
   decodeJwt,
   downloadReport,
+  getAdminMetrics,
   getTicketDetail,
   listTickets,
+  listTemplates,
   listUsers,
   login,
   publishTicket,
   qaDecision,
   qualifyTicket,
   submitProof,
+  updateTemplate,
   updateUserRole
 } from "./api";
-import { AdminUser, Role, Ticket, TicketDetail } from "./types";
+import { AdminMetrics, AdminUser, Role, Ticket, TicketDetail, TicketTemplate } from "./types";
 
 type View = "tickets" | "feed" | "qa" | "admin";
 
@@ -49,11 +54,34 @@ const defaultProof = {
   files: [] as File[]
 };
 
+const defaultTemplateForm = {
+  name: "",
+  category: "",
+  task_class: 1,
+  checklist_json: '{"fields":[]}',
+  proof_policy_json: '{"min_photos":1,"require_gps":true}',
+  default_geofence_radius_m: "25"
+};
+
 function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "-";
   }
   return new Date(value).toLocaleString();
+}
+
+function formatSeconds(value: number | null): string {
+  if (value == null) {
+    return "-";
+  }
+  return `${Math.round(value)} s`;
+}
+
+function formatPercent(value: number | null): string {
+  if (value == null) {
+    return "-";
+  }
+  return `${(value * 100).toFixed(1)} %`;
 }
 
 function App() {
@@ -82,6 +110,10 @@ function App() {
   const [workerRadius, setWorkerRadius] = useState("10");
 
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [templates, setTemplates] = useState<TicketTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [templateForm, setTemplateForm] = useState(defaultTemplateForm);
+  const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
 
   const selectedTicket = useMemo(() => tickets.find((t) => t.id === selectedTicketId) ?? null, [tickets, selectedTicketId]);
 
@@ -152,6 +184,22 @@ function App() {
     setAdminUsers(users);
   }, [token, userRole]);
 
+  const loadTemplates = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    const data = await listTemplates(token);
+    setTemplates(data);
+  }, [token]);
+
+  const loadAdminMetrics = useCallback(async () => {
+    if (!token || userRole !== "ADMIN") {
+      return;
+    }
+    const metrics = await getAdminMetrics(token);
+    setAdminMetrics(metrics);
+  }, [token, userRole]);
+
   useEffect(() => {
     if (!token) {
       return;
@@ -160,10 +208,10 @@ function App() {
     resetMessages();
     setLoading(true);
 
-    Promise.all([loadTickets(), loadAdminUsers()])
+    Promise.all([loadTickets(), loadAdminUsers(), loadTemplates(), loadAdminMetrics()])
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [token, view, reloadToken, loadTickets, loadAdminUsers]);
+  }, [token, view, reloadToken, loadTickets, loadAdminUsers, loadTemplates, loadAdminMetrics]);
 
   useEffect(() => {
     if (!selectedTicketId) {
@@ -200,6 +248,7 @@ function App() {
 
     try {
       await createTicket(token, {
+        template_id: selectedTemplateId || null,
         title: createTicketForm.title,
         description: createTicketForm.description,
         category: createTicketForm.category,
@@ -215,6 +264,7 @@ function App() {
       });
       setMessage("Ticket erstellt.");
       setCreateTicketForm(defaultCreateTicket);
+      setSelectedTemplateId("");
       setReloadToken((v) => v + 1);
     } catch (err) {
       setError((err as Error).message);
@@ -359,6 +409,90 @@ function App() {
     }
   };
 
+  const onApplyTemplateToTicketForm = () => {
+    const template = templates.find((item) => item.id === selectedTemplateId);
+    if (!template) {
+      return;
+    }
+    setCreateTicketForm((current) => ({
+      ...current,
+      category: template.category,
+      task_class: template.task_class,
+      geofence_radius_m: String(template.default_geofence_radius_m),
+      proof_policy_json: JSON.stringify(template.proof_policy_json)
+    }));
+  };
+
+  const onSelectTemplateForEdit = (template: TicketTemplate) => {
+    setSelectedTemplateId(template.id);
+    setTemplateForm({
+      name: template.name,
+      category: template.category,
+      task_class: template.task_class,
+      checklist_json: JSON.stringify(template.checklist_json),
+      proof_policy_json: JSON.stringify(template.proof_policy_json),
+      default_geofence_radius_m: String(template.default_geofence_radius_m)
+    });
+  };
+
+  const onSaveTemplate = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!token || userRole !== "ADMIN") {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      const payload = {
+        name: templateForm.name,
+        category: templateForm.category,
+        task_class: Number(templateForm.task_class),
+        checklist_json: JSON.parse(templateForm.checklist_json),
+        proof_policy_json: JSON.parse(templateForm.proof_policy_json),
+        default_geofence_radius_m: Number(templateForm.default_geofence_radius_m)
+      };
+
+      if (selectedTemplateId && templates.some((item) => item.id === selectedTemplateId)) {
+        await updateTemplate(token, selectedTemplateId, payload);
+        setMessage("Template aktualisiert.");
+      } else {
+        await createTemplate(token, payload);
+        setMessage("Template erstellt.");
+      }
+
+      setTemplateForm(defaultTemplateForm);
+      setSelectedTemplateId("");
+      setReloadToken((v) => v + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onDeleteTemplate = async (templateId: string) => {
+    if (!token || userRole !== "ADMIN") {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      await deleteTemplate(token, templateId);
+      setMessage("Template geloescht.");
+      if (selectedTemplateId === templateId) {
+        setSelectedTemplateId("");
+        setTemplateForm(defaultTemplateForm);
+      }
+      setReloadToken((v) => v + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = () => {
     setToken("");
     setUserRole(null);
@@ -367,6 +501,10 @@ function App() {
     setSelectedTicketId("");
     setTicketDetail(null);
     setAdminUsers([]);
+    setTemplates([]);
+    setSelectedTemplateId("");
+    setTemplateForm(defaultTemplateForm);
+    setAdminMetrics(null);
   };
 
   if (!token || !userRole) {
@@ -488,6 +626,20 @@ function App() {
           <article className="card">
             <h3>R-02 Neues Ticket</h3>
             <form onSubmit={onCreateTicket} className="form-grid">
+              <label>
+                Template (optional)
+                <select value={selectedTemplateId} onChange={(e) => setSelectedTemplateId(e.target.value)}>
+                  <option value="">- kein Template -</option>
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" onClick={onApplyTemplateToTicketForm} disabled={!selectedTemplateId}>
+                Template-Werte uebernehmen
+              </button>
               <label>
                 Titel
                 <input
@@ -793,47 +945,184 @@ function App() {
       )}
 
       {view === "admin" && userRole === "ADMIN" && (
-        <section className="card">
-          <h3>Admin - User Rollen</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Name</th>
-                <th>Rolle</th>
-                <th>Verified</th>
-                <th>Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {adminUsers.map((user) => (
-                <tr key={user.id}>
-                  <td>{user.email}</td>
-                  <td>{user.display_name ?? "-"}</td>
-                  <td>
-                    <select
-                      value={user.role}
-                      onChange={(e) => {
-                        const nextRole = e.target.value as Role;
-                        setAdminUsers((current) =>
-                          current.map((row) => (row.id === user.id ? { ...row, role: nextRole } : row))
-                        );
-                      }}
-                    >
-                      <option value="ADMIN">ADMIN</option>
-                      <option value="REQUESTER">REQUESTER</option>
-                      <option value="WORKER">WORKER</option>
-                      <option value="QA">QA</option>
-                    </select>
-                  </td>
-                  <td>{user.is_verified ? "ja" : "nein"}</td>
-                  <td>
-                    <button onClick={() => onUpdateUserRole(user.id, user.role)}>Speichern</button>
-                  </td>
+        <section className="grid-two">
+          <article className="card">
+            <h3>Admin - KPI Snapshot</h3>
+            {!adminMetrics && <p>Keine Metriken geladen.</p>}
+            {adminMetrics && (
+              <>
+                <p>
+                  <strong>Erzeugt:</strong> {formatDate(adminMetrics.generated_at)}
+                </p>
+                <p>
+                  <strong>Tickets:</strong> {adminMetrics.totals.tickets}
+                </p>
+                <p>
+                  <strong>Proofs:</strong> {adminMetrics.totals.proofs}
+                </p>
+                <p>
+                  <strong>QA entschieden:</strong> {adminMetrics.totals.qa_decided_proofs}
+                </p>
+                <p>
+                  <strong>Median Ticket-&gt;Accept:</strong>{" "}
+                  {formatSeconds(adminMetrics.kpis.median_ticket_to_accepted_seconds)}
+                </p>
+                <p>
+                  <strong>First-Pass-Quote:</strong> {formatPercent(adminMetrics.kpis.first_pass_proof_complete_rate)}
+                </p>
+                <p>
+                  <strong>QA Durchlaufzeit:</strong> {formatSeconds(adminMetrics.kpis.avg_qa_cycle_seconds)}
+                </p>
+                <p>
+                  <strong>Nachforderungsrate:</strong> {formatPercent(adminMetrics.kpis.change_request_rate)}
+                </p>
+              </>
+            )}
+          </article>
+
+          <article className="card">
+            <h3>Admin - User Rollen</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Name</th>
+                  <th>Rolle</th>
+                  <th>Verified</th>
+                  <th>Aktion</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {adminUsers.map((user) => (
+                  <tr key={user.id}>
+                    <td>{user.email}</td>
+                    <td>{user.display_name ?? "-"}</td>
+                    <td>
+                      <select
+                        value={user.role}
+                        onChange={(e) => {
+                          const nextRole = e.target.value as Role;
+                          setAdminUsers((current) =>
+                            current.map((row) => (row.id === user.id ? { ...row, role: nextRole } : row))
+                          );
+                        }}
+                      >
+                        <option value="ADMIN">ADMIN</option>
+                        <option value="REQUESTER">REQUESTER</option>
+                        <option value="WORKER">WORKER</option>
+                        <option value="QA">QA</option>
+                      </select>
+                    </td>
+                    <td>{user.is_verified ? "ja" : "nein"}</td>
+                    <td>
+                      <button onClick={() => onUpdateUserRole(user.id, user.role)}>Speichern</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </article>
+
+          <article className="card full-width">
+            <h3>Admin - Templates</h3>
+            <form onSubmit={onSaveTemplate} className="form-grid">
+              <label>
+                Name
+                <input
+                  value={templateForm.name}
+                  onChange={(e) => setTemplateForm((v) => ({ ...v, name: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Kategorie
+                <input
+                  value={templateForm.category}
+                  onChange={(e) => setTemplateForm((v) => ({ ...v, category: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Task-Klasse
+                <select
+                  value={templateForm.task_class}
+                  onChange={(e) => setTemplateForm((v) => ({ ...v, task_class: Number(e.target.value) }))}
+                >
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                </select>
+              </label>
+              <label>
+                Geofence Default (m)
+                <input
+                  type="number"
+                  value={templateForm.default_geofence_radius_m}
+                  onChange={(e) => setTemplateForm((v) => ({ ...v, default_geofence_radius_m: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Checklist JSON
+                <textarea
+                  value={templateForm.checklist_json}
+                  onChange={(e) => setTemplateForm((v) => ({ ...v, checklist_json: e.target.value }))}
+                />
+              </label>
+              <label>
+                Proof Policy JSON
+                <textarea
+                  value={templateForm.proof_policy_json}
+                  onChange={(e) => setTemplateForm((v) => ({ ...v, proof_policy_json: e.target.value }))}
+                />
+              </label>
+              <div className="button-row">
+                <button type="submit">{selectedTemplateId ? "Template updaten" : "Template erstellen"}</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedTemplateId("");
+                    setTemplateForm(defaultTemplateForm);
+                  }}
+                >
+                  Formular leeren
+                </button>
+              </div>
+            </form>
+
+            <h4>Vorhandene Templates</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Kategorie</th>
+                  <th>Klasse</th>
+                  <th>Geofence</th>
+                  <th>Aktion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {templates.map((template) => (
+                  <tr key={template.id}>
+                    <td>{template.name}</td>
+                    <td>{template.category}</td>
+                    <td>{template.task_class}</td>
+                    <td>{template.default_geofence_radius_m}</td>
+                    <td>
+                      <div className="button-row">
+                        <button type="button" onClick={() => onSelectTemplateForEdit(template)}>
+                          Bearbeiten
+                        </button>
+                        <button type="button" onClick={() => onDeleteTemplate(template.id)}>
+                          Loeschen
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </article>
         </section>
       )}
     </main>

@@ -8,6 +8,8 @@ const envSchema = z.object({
   AUTH_DEMO_PASSWORD: z.string().min(1).default("demo123"),
   UPLOAD_DIR: z.string().default("uploads"),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  PROOF_UPLOAD_RATE_LIMIT_WINDOW_SEC: z.coerce.number().int().positive().default(60),
+  PROOF_UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   ALLOWED_MIME_TYPES: z.string().default("image/jpeg,image/png,image/webp"),
   CORS_ORIGIN: z.string().default("http://localhost:3000")
 });

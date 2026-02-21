@@ -14,6 +14,7 @@ import { asyncHandler } from "../lib/http";
 import { assertTransition } from "../lib/statusMachine";
 import { buildValidationFlags, haversineDistanceMeters } from "../lib/geoTimeValidation";
 import { writeStatusEvent } from "../lib/audit";
+import { checkSlidingWindowRateLimit } from "../lib/rateLimit";
 import { ProofPolicy, QaDecision, QA_DECISIONS, Role, TicketStatus } from "../types";
 
 const loginSchema = z.object({
@@ -24,17 +25,18 @@ const loginSchema = z.object({
 const ticketCreateSchema = z
   .object({
     project_id: z.string().uuid().nullable().optional(),
+    template_id: z.string().uuid().nullable().optional(),
     title: z.string().min(1),
     description: z.string().optional().default(""),
-    category: z.string().min(1),
-    task_class: z.number().int().min(1).max(3),
+    category: z.string().min(1).optional(),
+    task_class: z.number().int().min(1).max(3).optional(),
     location_lat: z.number().min(-90).max(90),
     location_lng: z.number().min(-180).max(180),
-    geofence_radius_m: z.number().int().min(5).max(2000),
+    geofence_radius_m: z.number().int().min(5).max(2000).optional(),
     time_window_start: z.string().datetime().nullable().optional(),
     time_window_end: z.string().datetime().nullable().optional(),
     deadline_at: z.string().datetime(),
-    proof_policy_json: z.record(z.any()).optional().default({}),
+    proof_policy_json: z.record(z.any()).optional(),
     safety_flags_json: z.record(z.any()).optional().default({})
   })
   .superRefine((value, ctx) => {
@@ -59,6 +61,24 @@ const ticketCreateSchema = z
       }
     }
   });
+
+const templateCreateSchema = z.object({
+  name: z.string().min(1),
+  category: z.string().min(1),
+  task_class: z.number().int().min(1).max(3),
+  checklist_json: z.record(z.any()).optional().default({}),
+  proof_policy_json: z.record(z.any()).optional().default({}),
+  default_geofence_radius_m: z.number().int().min(5).max(2000).optional().default(25)
+});
+
+const templateUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  category: z.string().min(1).optional(),
+  task_class: z.number().int().min(1).max(3).optional(),
+  checklist_json: z.record(z.any()).optional(),
+  proof_policy_json: z.record(z.any()).optional(),
+  default_geofence_radius_m: z.number().int().min(5).max(2000).optional()
+});
 
 const qualifySchema = z.object({
   task_class: z.number().int().min(1).max(3).optional(),
@@ -111,6 +131,17 @@ type DbProof = {
   created_at: string;
 };
 
+type DbTemplate = {
+  id: string;
+  name: string;
+  category: string;
+  task_class: number;
+  checklist_json: Record<string, unknown>;
+  proof_policy_json: Record<string, unknown>;
+  default_geofence_radius_m: number;
+  created_at: string;
+};
+
 function parseJsonObject(input: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(input);
@@ -140,6 +171,15 @@ async function getTicketOrThrow(ticketId: string): Promise<DbTicket> {
     throw new Error("NOT_FOUND:Ticket not found");
   }
   return ticket;
+}
+
+async function getTemplateOrThrow(templateId: string): Promise<DbTemplate> {
+  const result = await pool.query<DbTemplate>("SELECT * FROM ticket_templates WHERE id = $1", [templateId]);
+  const template = result.rows[0];
+  if (!template) {
+    throw new Error("NOT_FOUND:Template not found");
+  }
+  return template;
 }
 
 async function listProofsByTicket(ticketId: string): Promise<Array<DbProof & { files: Array<Record<string, unknown>> }>> {
@@ -256,6 +296,203 @@ export function registerRoutes(app: Express): void {
   );
 
   app.get(
+    "/admin/metrics",
+    authorize("admin:metrics:read"),
+    asyncHandler(async (_req, res) => {
+      const totalsResult = await pool.query<{
+        total_tickets: string;
+        total_proofs: string;
+        qa_decided_proofs: string;
+      }>(
+        `
+        SELECT
+          (SELECT COUNT(*)::text FROM tickets) AS total_tickets,
+          (SELECT COUNT(*)::text FROM proofs) AS total_proofs,
+          (SELECT COUNT(*)::text FROM proofs WHERE qa_decision_at IS NOT NULL) AS qa_decided_proofs
+        `
+      );
+
+      const medianResult = await pool.query<{ median_seconds: string | null }>(
+        `
+        SELECT
+          percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (accepted_at - created_at))
+          )::text AS median_seconds
+        FROM tickets
+        WHERE accepted_at IS NOT NULL
+        `
+      );
+
+      const firstPassResult = await pool.query<{
+        total_decided_first: string;
+        approved_first: string;
+      }>(
+        `
+        WITH first_proofs AS (
+          SELECT DISTINCT ON (ticket_id) ticket_id, qa_status
+          FROM proofs
+          ORDER BY ticket_id, created_at ASC
+        )
+        SELECT
+          COUNT(*) FILTER (WHERE qa_status IN ('APPROVED','CHANGES_REQUESTED','REJECTED'))::text AS total_decided_first,
+          COUNT(*) FILTER (WHERE qa_status = 'APPROVED')::text AS approved_first
+        FROM first_proofs
+        `
+      );
+
+      const qaCycleResult = await pool.query<{ avg_seconds: string | null }>(
+        `
+        SELECT AVG(EXTRACT(EPOCH FROM (qa_decision_at - submitted_at)))::text AS avg_seconds
+        FROM proofs
+        WHERE qa_decision_at IS NOT NULL
+        `
+      );
+
+      const changeRateResult = await pool.query<{
+        requested_count: string;
+        total_decisions: string;
+      }>(
+        `
+        SELECT
+          COUNT(*) FILTER (WHERE qa_status = 'CHANGES_REQUESTED')::text AS requested_count,
+          COUNT(*) FILTER (WHERE qa_status IN ('APPROVED','CHANGES_REQUESTED','REJECTED'))::text AS total_decisions
+        FROM proofs
+        `
+      );
+
+      const totals = totalsResult.rows[0];
+      const firstPass = firstPassResult.rows[0];
+      const changeRate = changeRateResult.rows[0];
+
+      const firstPassDenominator = Number(firstPass.total_decided_first);
+      const changeRateDenominator = Number(changeRate.total_decisions);
+
+      res.json({
+        generated_at: new Date().toISOString(),
+        totals: {
+          tickets: Number(totals.total_tickets),
+          proofs: Number(totals.total_proofs),
+          qa_decided_proofs: Number(totals.qa_decided_proofs)
+        },
+        kpis: {
+          median_ticket_to_accepted_seconds:
+            medianResult.rows[0].median_seconds == null ? null : Number(medianResult.rows[0].median_seconds),
+          first_pass_proof_complete_rate:
+            firstPassDenominator > 0 ? Number(firstPass.approved_first) / firstPassDenominator : null,
+          avg_qa_cycle_seconds:
+            qaCycleResult.rows[0].avg_seconds == null ? null : Number(qaCycleResult.rows[0].avg_seconds),
+          change_request_rate:
+            changeRateDenominator > 0 ? Number(changeRate.requested_count) / changeRateDenominator : null
+        }
+      });
+    })
+  );
+
+  app.get(
+    "/templates",
+    authorize("template:list"),
+    asyncHandler(async (_req, res) => {
+      const result = await pool.query<DbTemplate>("SELECT * FROM ticket_templates ORDER BY created_at DESC");
+      res.json(result.rows);
+    })
+  );
+
+  app.post(
+    "/templates",
+    authorize("template:write"),
+    asyncHandler(async (req, res) => {
+      const payload = templateCreateSchema.parse(req.body);
+      const result = await pool.query<DbTemplate>(
+        `
+        INSERT INTO ticket_templates (
+          name,
+          category,
+          task_class,
+          checklist_json,
+          proof_policy_json,
+          default_geofence_radius_m
+        )
+        VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)
+        RETURNING *
+        `,
+        [
+          payload.name,
+          payload.category,
+          payload.task_class,
+          JSON.stringify(payload.checklist_json),
+          JSON.stringify(payload.proof_policy_json),
+          payload.default_geofence_radius_m
+        ]
+      );
+
+      res.status(201).json(result.rows[0]);
+    })
+  );
+
+  app.patch(
+    "/templates/:templateId",
+    authorize("template:write"),
+    asyncHandler(async (req, res) => {
+      const payload = templateUpdateSchema.parse(req.body ?? {});
+      const hasAnyUpdate =
+        payload.name !== undefined ||
+        payload.category !== undefined ||
+        payload.task_class !== undefined ||
+        payload.checklist_json !== undefined ||
+        payload.proof_policy_json !== undefined ||
+        payload.default_geofence_radius_m !== undefined;
+
+      if (!hasAnyUpdate) {
+        throw new Error("BAD_REQUEST:No template fields provided for update");
+      }
+
+      const result = await pool.query<DbTemplate>(
+        `
+        UPDATE ticket_templates
+        SET
+          name = COALESCE($1, name),
+          category = COALESCE($2, category),
+          task_class = COALESCE($3, task_class),
+          checklist_json = CASE WHEN $4::jsonb IS NULL THEN checklist_json ELSE $4::jsonb END,
+          proof_policy_json = CASE WHEN $5::jsonb IS NULL THEN proof_policy_json ELSE $5::jsonb END,
+          default_geofence_radius_m = COALESCE($6, default_geofence_radius_m)
+        WHERE id = $7
+        RETURNING *
+        `,
+        [
+          payload.name ?? null,
+          payload.category ?? null,
+          payload.task_class ?? null,
+          payload.checklist_json ? JSON.stringify(payload.checklist_json) : null,
+          payload.proof_policy_json ? JSON.stringify(payload.proof_policy_json) : null,
+          payload.default_geofence_radius_m ?? null,
+          req.params.templateId
+        ]
+      );
+
+      if (!result.rows[0]) {
+        throw new Error("NOT_FOUND:Template not found");
+      }
+
+      res.json(result.rows[0]);
+    })
+  );
+
+  app.delete(
+    "/templates/:templateId",
+    authorize("template:write"),
+    asyncHandler(async (req, res) => {
+      const result = await pool.query<{ id: string }>("DELETE FROM ticket_templates WHERE id = $1 RETURNING id", [
+        req.params.templateId
+      ]);
+      if (!result.rows[0]) {
+        throw new Error("NOT_FOUND:Template not found");
+      }
+      res.status(204).send();
+    })
+  );
+
+  app.get(
     "/tickets",
     authorize("ticket:list"),
     asyncHandler(async (req, res) => {
@@ -306,6 +543,23 @@ export function registerRoutes(app: Express): void {
     authorize("ticket:create"),
     asyncHandler(async (req, res) => {
       const payload = ticketCreateSchema.parse(req.body);
+      const template = payload.template_id ? await getTemplateOrThrow(payload.template_id) : null;
+
+      const category = payload.category ?? template?.category;
+      const taskClass = payload.task_class ?? template?.task_class;
+      const geofenceRadiusM = payload.geofence_radius_m ?? template?.default_geofence_radius_m;
+      const proofPolicy = payload.proof_policy_json ?? template?.proof_policy_json ?? {};
+
+      if (!category) {
+        throw new Error("BAD_REQUEST:category is required");
+      }
+      if (!taskClass) {
+        throw new Error("BAD_REQUEST:task_class is required");
+      }
+      if (!geofenceRadiusM) {
+        throw new Error("BAD_REQUEST:geofence_radius_m is required");
+      }
+
       const insertResult = await pool.query<DbTicket>(
         `
         INSERT INTO tickets (
@@ -335,15 +589,15 @@ export function registerRoutes(app: Express): void {
           req.user!.id,
           payload.title,
           payload.description,
-          payload.category,
-          payload.task_class,
+          category,
+          taskClass,
           payload.location_lat,
           payload.location_lng,
-          payload.geofence_radius_m,
+          geofenceRadiusM,
           payload.time_window_start ?? null,
           payload.time_window_end ?? null,
           payload.deadline_at,
-          JSON.stringify(payload.proof_policy_json),
+          JSON.stringify(proofPolicy),
           JSON.stringify(payload.safety_flags_json)
         ]
       );
@@ -355,7 +609,10 @@ export function registerRoutes(app: Express): void {
         fromStatus: null,
         toStatus: "NEW",
         eventType: "STATUS_CHANGE",
-        payload: { reason: "ticket_created" }
+        payload: {
+          reason: "ticket_created",
+          template_id: template?.id ?? null
+        }
       });
 
       res.status(201).json(ticket);
@@ -487,6 +744,18 @@ export function registerRoutes(app: Express): void {
 
       if (req.user!.role === "WORKER" && ticket.accepted_by_user_id !== req.user!.id) {
         throw new Error("BAD_REQUEST:Only the assigned worker can submit proof");
+      }
+
+      const limitKey = `proof-upload:${req.user!.id}:${req.ip ?? "unknown"}`;
+      const rateLimit = checkSlidingWindowRateLimit({
+        key: limitKey,
+        windowSec: config.PROOF_UPLOAD_RATE_LIMIT_WINDOW_SEC,
+        maxRequests: config.PROOF_UPLOAD_RATE_LIMIT_MAX
+      });
+      if (!rateLimit.allowed) {
+        throw new Error(
+          `TOO_MANY_REQUESTS:Proof upload rate limit exceeded. Retry in ${rateLimit.retryAfterSec} second(s).`
+        );
       }
 
       const files = (req.files as Express.Multer.File[] | undefined) ?? [];

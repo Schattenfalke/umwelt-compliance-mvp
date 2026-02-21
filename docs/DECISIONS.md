@@ -35,3 +35,20 @@ Datum: 2026-02-21
 8. Admin-Minimum
 - Unklarheit: UI-Flow fordert Admin-User-Rollenpflege, OpenAPI listet keine Admin-Endpunkte.
 - Entscheidung: Minimal ergaenzt um `GET /admin/users` und `PATCH /admin/users/{userId}/role` fuer die geforderte Admin-Funktion.
+
+9. Upload-Rate-Limit
+- Unklarheit: Tech Spec fordert Upload-Rate-Limiting, aber ohne Schwellwerte.
+- Entscheidung: Sliding-Window-Limit fuer Proof-Uploads auf `10` Requests pro `60` Sekunden pro User/IP.
+- Folge: Bei Ueberschreitung antwortet die API mit HTTP 429.
+
+10. KPI-Definitionen fuer Pilot
+- Unklarheit: KPI-Formeln sind im PRD benannt, aber nicht formalisiert.
+- Entscheidung:
+  - `median_ticket_to_accepted_seconds`: Median aus `accepted_at - created_at` fuer akzeptierte Tickets.
+  - `first_pass_proof_complete_rate`: Anteil Tickets, deren erster entschiedener Proof direkt `APPROVED` ist.
+  - `avg_qa_cycle_seconds`: Mittelwert aus `qa_decision_at - submitted_at`.
+  - `change_request_rate`: Anteil `CHANGES_REQUESTED` unter QA-entschiedenen Proofs.
+
+11. Template 3 Klassenwahl
+- Unklarheit: Vorlage 3 ist in `06_TASK_TEMPLATES.md` als Klasse 2/3 Kontext beschrieben.
+- Entscheidung: Seed defaultet auf Klasse `3` (konservativ/fachkraftpflichtig).
