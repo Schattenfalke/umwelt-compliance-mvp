@@ -101,6 +101,21 @@ Demo-Zugaenge:
 
 ---
 
+## GitHub Pages (Web)
+
+Das Frontend wird per GitHub Actions aus `web/` gebaut und nach Pages deployed.
+
+1. `Settings -> Pages -> Source` auf **GitHub Actions** stellen.
+2. `Settings -> Secrets and variables -> Actions -> Variables`:
+   - Variable `VITE_API_URL` anlegen (oeffentliche API-URL, z. B. `https://<deine-api-domain>`).
+3. Push auf `main` oder Workflow manuell starten.
+
+Wichtig:
+- Bei Pages kann man als Branch-Quelle nur `/(root)` oder `/docs` waehlen, nicht `/web`.
+- Ohne gesetzte `VITE_API_URL` bricht der Pages-Workflow bewusst mit Fehlermeldung ab.
+
+---
+
 ## Durchgefuehrte Sprints
 
 ### Sprint 0 (abgeschlossen)
