@@ -103,12 +103,16 @@ function runStatusTransitionTests(): void {
 function runRbacTests(): void {
   assert.equal(hasPermission("REQUESTER", "ticket:create"), true);
   assert.equal(hasPermission("REQUESTER", "proof:qa"), false);
+  assert.equal(hasPermission("REQUESTER", "notification:read"), true);
   assert.equal(hasPermission("QA", "ticket:qualify"), true);
   assert.equal(hasPermission("QA", "proof:qa"), true);
+  assert.equal(hasPermission("QA", "ticket:move"), true);
   assert.equal(hasPermission("ADMIN", "admin:users:read"), true);
   assert.equal(hasPermission("ADMIN", "admin:metrics:read"), true);
   assert.equal(hasPermission("REQUESTER", "project:create"), true);
   assert.equal(hasPermission("WORKER", "project:create"), false);
+  assert.equal(hasPermission("WORKER", "ticket:hint:create"), true);
+  assert.equal(hasPermission("WORKER", "ticket:create"), false);
   assert.equal(hasPermission("REQUESTER", "template:list"), true);
   assert.equal(hasPermission("REQUESTER", "template:write"), false);
   assert.throws(() => requirePermission("WORKER", "ticket:create"), /FORBIDDEN:ticket:create/);

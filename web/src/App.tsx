@@ -2,8 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptTicket,
   createProject,
+  createHintTicket,
   createTemplate,
   createTicket,
+  downloadKa5Csv,
+  downloadKa5Json,
   deleteTemplate,
   decodeJwt,
   downloadProofFile,
@@ -11,22 +14,64 @@ import {
   downloadReport,
   getAdminMetrics,
   getTicketDetail,
+  listNotifications,
   listProjects,
   listQaQueue,
+  listTaxonomyTerms,
   listTickets,
   listTemplates,
   listUsers,
   login,
+  markNotificationRead,
+  moveTicketStatus,
   publishTicket,
   qaDecision,
   qualifyTicket,
+  savePushSubscription,
   submitProof,
   updateTemplate,
   updateUserRole
 } from "./api";
-import { AdminMetrics, AdminUser, Project, QaQueueEntry, Role, Ticket, TicketDetail, TicketTemplate } from "./types";
+import {
+  AdminMetrics,
+  AdminUser,
+  NotificationEvent,
+  Project,
+  QaQueueEntry,
+  Role,
+  TaxonomyTerm,
+  Ticket,
+  TicketDetail,
+  TicketStatus,
+  TicketTemplate
+} from "./types";
 
-type View = "tickets" | "feed" | "qa" | "admin";
+type View = "tickets" | "kanban" | "feed" | "qa" | "admin" | "help";
+
+const kanbanColumns: TicketStatus[] = [
+  "NEW",
+  "QUALIFIED",
+  "PUBLISHED",
+  "ACCEPTED",
+  "PROOF_SUBMITTED",
+  "NEEDS_CHANGES",
+  "COMPLETED",
+  "REJECTED",
+  "ARCHIVED"
+];
+
+const categoryPills = [
+  "Vegetation",
+  "Boden",
+  "Abfall",
+  "Erosion",
+  "Wasser",
+  "Sicherheit",
+  "Bohrstock",
+  "Luzerne",
+  "Schadstelle",
+  "Monitoring"
+];
 
 const roleEmails: Record<Role, string> = {
   ADMIN: "admin@example.com",
@@ -43,9 +88,13 @@ const defaultCreateTicket = {
   location_lat: "52.52",
   location_lng: "13.405",
   geofence_radius_m: "25",
-  time_window_start: "",
-  time_window_end: "",
-  deadline_at: "",
+  time_window_start_date: "",
+  time_window_start_time: "",
+  time_window_end_date: "",
+  time_window_end_time: "",
+  deadline_date: "",
+  deadline_time: "",
+  taxonomy_term_ids: [] as string[],
   proof_policy_json: '{"min_photos":1,"require_gps":true,"required_fields":["checklist_complete"]}',
   safety_flags_json: '{"public_access_only":true,"permit_required":false,"no_trespass":true}'
 };
@@ -55,7 +104,23 @@ const defaultProof = {
   checklist_answers_json: '{"checklist_complete":true}',
   gps_lat: "",
   gps_lng: "",
-  captured_at: "",
+  captured_date: "",
+  captured_time: "",
+  files: [] as File[]
+};
+
+const defaultHintForm = {
+  title: "",
+  description: "",
+  category: "",
+  location_lat: "52.52",
+  location_lng: "13.405",
+  geofence_radius_m: "25",
+  observed_date: "",
+  observed_time: "",
+  deadline_date: "",
+  deadline_time: "",
+  taxonomy_term_ids: [] as string[],
   files: [] as File[]
 };
 
@@ -94,6 +159,24 @@ function formatPercent(value: number | null): string {
   return `${(value * 100).toFixed(1)} %`;
 }
 
+function toIsoFromDateAndTime(dateValue: string, timeValue: string, fieldName: string): string {
+  if (!dateValue || !timeValue) {
+    throw new Error(`${fieldName} ist unvollstaendig. Bitte Datum und Uhrzeit auswaehlen.`);
+  }
+  const parsed = new Date(`${dateValue}T${timeValue}`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fieldName} ist ungueltig.`);
+  }
+  return parsed.toISOString();
+}
+
+function toOptionalIsoFromDateAndTime(dateValue: string, timeValue: string): string | null {
+  if (!dateValue && !timeValue) {
+    return null;
+  }
+  return toIsoFromDateAndTime(dateValue, timeValue, "Datum/Uhrzeit");
+}
+
 function getStatusBadgeClass(status: string): string {
   switch (status) {
     case "NEW":
@@ -118,6 +201,22 @@ function getStatusBadgeClass(status: string): string {
     default:
       return "status-badge";
   }
+}
+
+function canRoleMoveToStatus(role: Role, toStatus: TicketStatus): boolean {
+  if (role === "ADMIN") {
+    return true;
+  }
+
+  if (role === "QA") {
+    return ["QUALIFIED", "PUBLISHED", "NEEDS_CHANGES", "COMPLETED", "REJECTED"].includes(toStatus);
+  }
+
+  if (role === "WORKER") {
+    return ["ACCEPTED", "PROOF_SUBMITTED"].includes(toStatus);
+  }
+
+  return false;
 }
 
 function parseCoordinate(value: string): number | null {
@@ -193,6 +292,7 @@ function App() {
 
   const [createTicketForm, setCreateTicketForm] = useState(defaultCreateTicket);
   const [proofForm, setProofForm] = useState(defaultProof);
+  const [hintForm, setHintForm] = useState(defaultHintForm);
   const [qaComment, setQaComment] = useState("");
 
   const [workerLat, setWorkerLat] = useState("52.52");
@@ -206,11 +306,19 @@ function App() {
   const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectForm, setProjectForm] = useState(defaultProjectForm);
+  const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
   const [ticketProjectFilter, setTicketProjectFilter] = useState<string>("");
+  const [ticketTaxonomyFilter, setTicketTaxonomyFilter] = useState<string>("");
+  const [ticketTaxonomyQuery, setTicketTaxonomyQuery] = useState<string>("");
+  const [ticketDateFrom, setTicketDateFrom] = useState<string>("");
+  const [ticketDateTo, setTicketDateTo] = useState<string>("");
   const [ticketProjectId, setTicketProjectId] = useState<string>("");
+  const [hintProjectId, setHintProjectId] = useState<string>("");
   const [qaFlagFilter, setQaFlagFilter] = useState<"all" | "geo_fail" | "time_fail" | "exif_missing">("all");
   const [qaQueueEntries, setQaQueueEntries] = useState<QaQueueEntry[]>([]);
   const [proofImageUrls, setProofImageUrls] = useState<Record<string, string>>({});
+  const [notifications, setNotifications] = useState<NotificationEvent[]>([]);
+  const [draggingTicketId, setDraggingTicketId] = useState<string>("");
 
   const selectedTicket = useMemo(() => tickets.find((t) => t.id === selectedTicketId) ?? null, [tickets, selectedTicketId]);
   const createTicketMapUrl = useMemo(() => {
@@ -277,7 +385,7 @@ function App() {
       return;
     }
 
-    if (view === "qa") {
+    if (view === "qa" || view === "help") {
       setTickets([]);
       return;
     }
@@ -290,8 +398,24 @@ function App() {
         near_radius_km: workerRadius
       };
     }
-    if (view === "tickets" && ticketProjectFilter) {
-      params = { project_id: ticketProjectFilter };
+    if (view === "tickets" || view === "kanban") {
+      const nextParams: Record<string, string | number> = {};
+      if (ticketProjectFilter) {
+        nextParams.project_id = ticketProjectFilter;
+      }
+      if (ticketTaxonomyFilter) {
+        nextParams.taxonomy_term_ids = ticketTaxonomyFilter;
+      }
+      if (ticketTaxonomyQuery.trim()) {
+        nextParams.taxonomy_query = ticketTaxonomyQuery.trim();
+      }
+      if (ticketDateFrom) {
+        nextParams.date_from = ticketDateFrom;
+      }
+      if (ticketDateTo) {
+        nextParams.date_to = ticketDateTo;
+      }
+      params = Object.keys(nextParams).length > 0 ? nextParams : undefined;
     }
 
     const data = await listTickets(token, params);
@@ -301,7 +425,20 @@ function App() {
       setSelectedTicketId("");
       setTicketDetail(null);
     }
-  }, [token, userRole, view, workerLat, workerLng, workerRadius, selectedTicketId, ticketProjectFilter]);
+  }, [
+    token,
+    userRole,
+    view,
+    workerLat,
+    workerLng,
+    workerRadius,
+    selectedTicketId,
+    ticketProjectFilter,
+    ticketTaxonomyFilter,
+    ticketTaxonomyQuery,
+    ticketDateFrom,
+    ticketDateTo
+  ]);
 
   const loadTicketDetail = useCallback(
     async (ticketId: string) => {
@@ -346,6 +483,14 @@ function App() {
     setProjects(data);
   }, [token]);
 
+  const loadTaxonomyTerms = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    const data = await listTaxonomyTerms(token);
+    setTaxonomyTerms(data);
+  }, [token]);
+
   const loadQaQueue = useCallback(async () => {
     if (!token || userRole !== "QA") {
       setQaQueueEntries([]);
@@ -355,6 +500,15 @@ function App() {
     setQaQueueEntries(entries);
   }, [token, userRole, qaFlagFilter]);
 
+  const loadNotifications = useCallback(async () => {
+    if (!token) {
+      setNotifications([]);
+      return;
+    }
+    const items = await listNotifications(token, { unread_only: true, limit: 20 });
+    setNotifications(items);
+  }, [token]);
+
   useEffect(() => {
     if (!token) {
       return;
@@ -363,10 +517,31 @@ function App() {
     resetMessages();
     setLoading(true);
 
-    Promise.all([loadTickets(), loadAdminUsers(), loadTemplates(), loadAdminMetrics(), loadProjects(), loadQaQueue()])
+    Promise.all([
+      loadTickets(),
+      loadAdminUsers(),
+      loadTemplates(),
+      loadAdminMetrics(),
+      loadProjects(),
+      loadTaxonomyTerms(),
+      loadQaQueue(),
+      loadNotifications()
+    ])
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [token, view, reloadToken, loadTickets, loadAdminUsers, loadTemplates, loadAdminMetrics, loadProjects, loadQaQueue]);
+  }, [
+    token,
+    view,
+    reloadToken,
+    loadTickets,
+    loadAdminUsers,
+    loadTemplates,
+    loadAdminMetrics,
+    loadProjects,
+    loadTaxonomyTerms,
+    loadQaQueue,
+    loadNotifications
+  ]);
 
   useEffect(() => {
     if (!selectedTicketId) {
@@ -375,6 +550,19 @@ function App() {
     }
     loadTicketDetail(selectedTicketId).catch((err) => setError(err.message));
   }, [selectedTicketId, reloadToken, loadTicketDetail]);
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      return;
+    }
+
+    if (!ticketProjectId) {
+      setTicketProjectId(projects[0].id);
+    }
+    if (!hintProjectId) {
+      setHintProjectId(projects[0].id);
+    }
+  }, [projects, ticketProjectId, hintProjectId]);
 
   useEffect(() => {
     let active = true;
@@ -442,6 +630,94 @@ function App() {
     };
   }, [view, userRole, token, ticketDetail, reloadToken]);
 
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+    if (!("serviceWorker" in navigator)) {
+      return;
+    }
+    if (!("PushManager" in window)) {
+      return;
+    }
+    if (!("Notification" in window)) {
+      return;
+    }
+
+    const registerPush = async () => {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        if (Notification.permission === "default") {
+          await Notification.requestPermission();
+        }
+        if (Notification.permission !== "granted") {
+          return;
+        }
+
+        let subscription = await registration.pushManager.getSubscription();
+        if (!subscription) {
+          subscription = await registration.pushManager.subscribe({ userVisibleOnly: true });
+        }
+
+        const json = subscription.toJSON();
+        if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+          return;
+        }
+        await savePushSubscription(token, {
+          endpoint: json.endpoint,
+          keys: {
+            p256dh: json.keys.p256dh,
+            auth: json.keys.auth
+          }
+        });
+      } catch (_error) {
+        // Web Push setup can fail on browsers without subscription support; polling notifications remains active.
+      }
+    };
+
+    registerPush().catch(() => undefined);
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      loadNotifications().catch(() => undefined);
+    }, 30000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [token, loadNotifications]);
+
+  useEffect(() => {
+    if (notifications.length === 0) {
+      return;
+    }
+    if (!("Notification" in window)) {
+      return;
+    }
+
+    if (Notification.permission !== "granted") {
+      return;
+    }
+
+    notifications.slice(0, 3).forEach((item) => {
+      const notification = new Notification(item.title, {
+        body: item.body,
+        tag: item.id
+      });
+
+      notification.onclick = () => {
+        if (item.ticket_id) {
+          setSelectedTicketId(item.ticket_id);
+        }
+      };
+    });
+  }, [notifications]);
+
   const onLogin = async (event: FormEvent) => {
     event.preventDefault();
     resetMessages();
@@ -468,8 +744,22 @@ function App() {
     setLoading(true);
 
     try {
+      if (!ticketProjectId) {
+        throw new Error("Bitte zuerst ein Projekt auswaehlen.");
+      }
+
+      const deadlineAt = toIsoFromDateAndTime(createTicketForm.deadline_date, createTicketForm.deadline_time, "Deadline");
+      const timeWindowStart = toOptionalIsoFromDateAndTime(
+        createTicketForm.time_window_start_date,
+        createTicketForm.time_window_start_time
+      );
+      const timeWindowEnd = toOptionalIsoFromDateAndTime(
+        createTicketForm.time_window_end_date,
+        createTicketForm.time_window_end_time
+      );
+
       await createTicket(token, {
-        project_id: ticketProjectId || null,
+        project_id: ticketProjectId,
         template_id: selectedTemplateId || null,
         title: createTicketForm.title,
         description: createTicketForm.description,
@@ -478,9 +768,10 @@ function App() {
         location_lat: Number(createTicketForm.location_lat),
         location_lng: Number(createTicketForm.location_lng),
         geofence_radius_m: Number(createTicketForm.geofence_radius_m),
-        time_window_start: createTicketForm.time_window_start || null,
-        time_window_end: createTicketForm.time_window_end || null,
-        deadline_at: createTicketForm.deadline_at,
+        time_window_start: timeWindowStart,
+        time_window_end: timeWindowEnd,
+        deadline_at: deadlineAt,
+        taxonomy_term_ids: createTicketForm.taxonomy_term_ids,
         proof_policy_json: JSON.parse(createTicketForm.proof_policy_json),
         safety_flags_json: JSON.parse(createTicketForm.safety_flags_json)
       });
@@ -563,7 +854,11 @@ function App() {
     setLoading(true);
     resetMessages();
     try {
-      await submitProof(token, selectedTicket.id, proofForm);
+      const capturedAt = toOptionalIsoFromDateAndTime(proofForm.captured_date, proofForm.captured_time) ?? "";
+      await submitProof(token, selectedTicket.id, {
+        ...proofForm,
+        captured_at: capturedAt
+      });
       setMessage("Proof eingereicht.");
       setProofForm(defaultProof);
       setReloadToken((v) => v + 1);
@@ -571,6 +866,89 @@ function App() {
       setError((err as Error).message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onCreateHint = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!token || userRole !== "WORKER") {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      if (!hintProjectId) {
+        throw new Error("Bitte ein Projekt fuer den Hinweis waehlen.");
+      }
+      if (hintForm.files.length === 0) {
+        throw new Error("Bitte mindestens ein Foto anhaengen.");
+      }
+
+      const observedAt = toOptionalIsoFromDateAndTime(hintForm.observed_date, hintForm.observed_time) ?? undefined;
+      const deadlineAt = toOptionalIsoFromDateAndTime(hintForm.deadline_date, hintForm.deadline_time) ?? undefined;
+
+      await createHintTicket(token, {
+        project_id: hintProjectId,
+        title: hintForm.title,
+        description: hintForm.description,
+        category: hintForm.category,
+        location_lat: hintForm.location_lat,
+        location_lng: hintForm.location_lng,
+        geofence_radius_m: hintForm.geofence_radius_m,
+        observed_at: observedAt,
+        deadline_at: deadlineAt,
+        taxonomy_term_ids: hintForm.taxonomy_term_ids,
+        files: hintForm.files
+      });
+
+      setHintForm(defaultHintForm);
+      setMessage("Hinweis wurde als Ticket angelegt.");
+      setReloadToken((v) => v + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onKanbanMove = async (ticketId: string, toStatus: TicketStatus) => {
+    if (!token || !userRole) {
+      return;
+    }
+    if (toStatus === "NEW") {
+      setError("Rueckverschiebung nach NEW ist im Kanban gesperrt.");
+      return;
+    }
+    if (!canRoleMoveToStatus(userRole, toStatus)) {
+      setError(`Rolle ${userRole} darf nicht auf ${toStatus} ziehen.`);
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      await moveTicketStatus(token, ticketId, toStatus);
+      setMessage(`Status auf ${toStatus} verschoben.`);
+      setReloadToken((v) => v + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+      setDraggingTicketId("");
+    }
+  };
+
+  const onMarkNotificationRead = async (notificationId: string) => {
+    if (!token) {
+      return;
+    }
+
+    try {
+      await markNotificationRead(token, notificationId);
+      setNotifications((current) => current.filter((entry) => entry.id !== notificationId));
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
 
@@ -625,6 +1003,53 @@ function App() {
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setMessage("Projekt-Report geoeffnet.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onDownloadKa5Csv = async () => {
+    if (!token) {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      const blob = await downloadKa5Csv(token, {
+        project_id: ticketProjectFilter || undefined,
+        date_from: ticketDateFrom || undefined,
+        date_to: ticketDateTo || undefined
+      });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setMessage("KA5 CSV Export geoeffnet.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onDownloadKa5Json = async () => {
+    if (!token) {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      const data = await downloadKa5Json(token, {
+        project_id: ticketProjectFilter || undefined,
+        date_from: ticketDateFrom || undefined,
+        date_to: ticketDateTo || undefined
+      });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setMessage("KA5 JSON Export geoeffnet.");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -765,6 +1190,7 @@ function App() {
     setTickets([]);
     setSelectedTicketId("");
     setTicketDetail(null);
+    setHintForm(defaultHintForm);
     setAdminUsers([]);
     setTemplates([]);
     setSelectedTemplateId("");
@@ -772,11 +1198,19 @@ function App() {
     setAdminMetrics(null);
     setProjects([]);
     setProjectForm(defaultProjectForm);
+    setTaxonomyTerms([]);
     setTicketProjectFilter("");
+    setTicketTaxonomyFilter("");
+    setTicketTaxonomyQuery("");
+    setTicketDateFrom("");
+    setTicketDateTo("");
     setTicketProjectId("");
+    setHintProjectId("");
     setQaQueueEntries([]);
     setQaFlagFilter("all");
     setProofImageUrls({});
+    setNotifications([]);
+    setDraggingTicketId("");
   };
 
   if (!token || !userRole) {
@@ -837,6 +1271,11 @@ function App() {
               Tickets
             </button>
           )}
+          {(userRole === "REQUESTER" || userRole === "ADMIN" || userRole === "QA") && (
+            <button onClick={() => setView("kanban")} className={view === "kanban" ? "active" : ""}>
+              Kanban
+            </button>
+          )}
           {userRole === "WORKER" && (
             <button onClick={() => setView("feed")} className={view === "feed" ? "active" : ""}>
               Mission Feed
@@ -852,6 +1291,9 @@ function App() {
               Admin
             </button>
           )}
+          <button onClick={() => setView("help")} className={view === "help" ? "active" : ""}>
+            Hilfe
+          </button>
           <button onClick={logout}>Logout</button>
         </nav>
       </header>
@@ -860,6 +1302,25 @@ function App() {
         <section className="card">
           {message && <p className="ok">{message}</p>}
           {error && <p className="error">{error}</p>}
+        </section>
+      )}
+
+      {notifications.length > 0 && (
+        <section className="card">
+          <h3>Benachrichtigungen</h3>
+          <ul className="list">
+            {notifications.map((entry) => (
+              <li key={entry.id}>
+                <div className="list-title-row">
+                  <strong>{entry.title}</strong>
+                  <button type="button" onClick={() => onMarkNotificationRead(entry.id)}>
+                    gelesen
+                  </button>
+                </div>
+                <div className="list-meta">{entry.body}</div>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
@@ -880,11 +1341,44 @@ function App() {
                   ))}
                 </select>
               </label>
+              <label>
+                Taxonomie
+                <select value={ticketTaxonomyFilter} onChange={(e) => setTicketTaxonomyFilter(e.target.value)}>
+                  <option value="">- alle Tags -</option>
+                  {taxonomyTerms.filter((term) => term.active).map((term) => (
+                    <option key={term.id} value={term.id}>
+                      {term.domain}: {term.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Suchbegriff (Tag)
+                <input
+                  value={ticketTaxonomyQuery}
+                  onChange={(e) => setTicketTaxonomyQuery(e.target.value)}
+                  placeholder="z. B. Luzerne"
+                />
+              </label>
+              <label>
+                Datum von
+                <input type="date" value={ticketDateFrom} onChange={(e) => setTicketDateFrom(e.target.value)} />
+              </label>
+              <label>
+                Datum bis
+                <input type="date" value={ticketDateTo} onChange={(e) => setTicketDateTo(e.target.value)} />
+              </label>
               <button type="button" onClick={() => setReloadToken((v) => v + 1)}>
                 Filter anwenden
               </button>
               <button type="button" onClick={onDownloadProjectReport} disabled={!ticketProjectFilter}>
                 Projekt-Report (PDF)
+              </button>
+              <button type="button" onClick={onDownloadKa5Csv}>
+                KA5 CSV
+              </button>
+              <button type="button" onClick={onDownloadKa5Json}>
+                KA5 JSON
               </button>
             </div>
             <div className="table-wrap">
@@ -893,6 +1387,7 @@ function App() {
                   <tr>
                     <th>Titel</th>
                     <th>Kategorie</th>
+                    <th>Tags</th>
                     <th>Klasse</th>
                     <th>Status</th>
                     <th>Deadline</th>
@@ -907,6 +1402,7 @@ function App() {
                     >
                       <td>{ticket.title}</td>
                       <td>{ticket.category}</td>
+                      <td>{ticket.taxonomy_terms.map((term) => term.label).join(", ") || "-"}</td>
                       <td>{ticket.task_class}</td>
                       <td>
                         <span className={getStatusBadgeClass(ticket.status)}>{ticket.status}</span>
@@ -924,9 +1420,8 @@ function App() {
             <p className="subtle">Pflichtfelder zuerst ausfuellen, dann optionale JSON-Policies verfeinern.</p>
             <form onSubmit={onCreateTicket} className="form-grid">
               <label>
-                Projekt (optional)
-                <select value={ticketProjectId} onChange={(e) => setTicketProjectId(e.target.value)}>
-                  <option value="">- ohne Projekt -</option>
+                Projekt (Pflicht)
+                <select value={ticketProjectId} onChange={(e) => setTicketProjectId(e.target.value)} required>
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.name}
@@ -971,6 +1466,18 @@ function App() {
                   required
                 />
               </label>
+              <div className="pill-row">
+                {categoryPills.map((pill) => (
+                  <button
+                    key={pill}
+                    type="button"
+                    className={`tag-pill ${createTicketForm.category === pill ? "active" : ""}`}
+                    onClick={() => setCreateTicketForm((v) => ({ ...v, category: pill }))}
+                  >
+                    {pill}
+                  </button>
+                ))}
+              </div>
               <label>
                 Task-Klasse
                 <select
@@ -1022,29 +1529,73 @@ function App() {
                 />
               </label>
               <label>
-                Time Window Start (optional)
+                Time Window Start - Datum (optional)
                 <input
-                  type="datetime-local"
-                  value={createTicketForm.time_window_start}
-                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, time_window_start: e.target.value }))}
+                  type="date"
+                  value={createTicketForm.time_window_start_date}
+                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, time_window_start_date: e.target.value }))}
                 />
               </label>
               <label>
-                Time Window End (optional)
+                Time Window Start - Uhrzeit (optional)
                 <input
-                  type="datetime-local"
-                  value={createTicketForm.time_window_end}
-                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, time_window_end: e.target.value }))}
+                  type="time"
+                  value={createTicketForm.time_window_start_time}
+                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, time_window_start_time: e.target.value }))}
                 />
               </label>
               <label>
-                Deadline
+                Time Window End - Datum (optional)
                 <input
-                  type="datetime-local"
-                  value={createTicketForm.deadline_at}
-                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, deadline_at: e.target.value }))}
+                  type="date"
+                  value={createTicketForm.time_window_end_date}
+                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, time_window_end_date: e.target.value }))}
+                />
+              </label>
+              <label>
+                Time Window End - Uhrzeit (optional)
+                <input
+                  type="time"
+                  value={createTicketForm.time_window_end_time}
+                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, time_window_end_time: e.target.value }))}
+                />
+              </label>
+              <label>
+                Deadline - Datum
+                <input
+                  type="date"
+                  value={createTicketForm.deadline_date}
+                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, deadline_date: e.target.value }))}
                   required
                 />
+              </label>
+              <label>
+                Deadline - Uhrzeit
+                <input
+                  type="time"
+                  value={createTicketForm.deadline_time}
+                  onChange={(e) => setCreateTicketForm((v) => ({ ...v, deadline_time: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Taxonomie-Tags
+                <select
+                  multiple
+                  value={createTicketForm.taxonomy_term_ids}
+                  onChange={(e) => {
+                    const ids = Array.from(e.target.selectedOptions).map((option) => option.value);
+                    setCreateTicketForm((v) => ({ ...v, taxonomy_term_ids: ids }));
+                  }}
+                >
+                  {taxonomyTerms
+                    .filter((term) => term.active)
+                    .map((term) => (
+                      <option key={term.id} value={term.id}>
+                        {term.domain}: {term.label}
+                      </option>
+                    ))}
+                </select>
               </label>
               <label>
                 Proof Policy JSON
@@ -1100,6 +1651,17 @@ function App() {
                   <strong>Status:</strong> <span className={getStatusBadgeClass(ticketDetail.status)}>{ticketDetail.status}</span>
                 </p>
                 <p>
+                  <strong>Origin:</strong> {ticketDetail.origin}
+                </p>
+                {ticketDetail.hint_note && (
+                  <p>
+                    <strong>Hinweis:</strong> {ticketDetail.hint_note}
+                  </p>
+                )}
+                <p>
+                  <strong>Taxonomie:</strong> {ticketDetail.taxonomy_terms.map((term) => term.label).join(", ") || "-"}
+                </p>
+                <p>
                   <strong>Proofs:</strong> {ticketDetail.proofs.length}
                 </p>
                 <div className="button-row">
@@ -1124,6 +1686,87 @@ function App() {
               </>
             )}
           </article>
+        </section>
+      )}
+
+      {view === "kanban" && (userRole === "REQUESTER" || userRole === "ADMIN" || userRole === "QA") && (
+        <section className="card">
+          <h3>Kanban Board</h3>
+          <p className="subtle">Status per Drag&Drop verschieben. Serverseitig gelten weiterhin strikte Transitionen und RBAC.</p>
+          <div className="inline-fields">
+            <label>
+              Projektfilter
+              <select value={ticketProjectFilter} onChange={(e) => setTicketProjectFilter(e.target.value)}>
+                <option value="">- alle Projekte -</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Taxonomie
+              <select value={ticketTaxonomyFilter} onChange={(e) => setTicketTaxonomyFilter(e.target.value)}>
+                <option value="">- alle Tags -</option>
+                {taxonomyTerms.filter((term) => term.active).map((term) => (
+                  <option key={term.id} value={term.id}>
+                    {term.domain}: {term.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={() => setReloadToken((v) => v + 1)}>
+              Board aktualisieren
+            </button>
+          </div>
+          <div className="kanban-board">
+            {kanbanColumns.map((columnStatus) => (
+              <section
+                key={columnStatus}
+                className="kanban-column"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (!draggingTicketId) {
+                    return;
+                  }
+                  const ticket = tickets.find((item) => item.id === draggingTicketId);
+                  if (!ticket || ticket.status === columnStatus) {
+                    setDraggingTicketId("");
+                    return;
+                  }
+                  onKanbanMove(ticket.id, columnStatus);
+                }}
+              >
+                <header>
+                  <strong>{columnStatus}</strong>
+                  <span>{tickets.filter((ticket) => ticket.status === columnStatus).length}</span>
+                </header>
+                <div className="kanban-cards">
+                  {tickets
+                    .filter((ticket) => ticket.status === columnStatus)
+                    .map((ticket) => (
+                      <article
+                        key={ticket.id}
+                        className="kanban-card"
+                        draggable={userRole !== "REQUESTER"}
+                        onDragStart={() => setDraggingTicketId(ticket.id)}
+                        onDragEnd={() => setDraggingTicketId("")}
+                      >
+                        <div className="list-title-row">
+                          <strong>{ticket.title}</strong>
+                          <span className={getStatusBadgeClass(ticket.status)}>{ticket.status}</span>
+                        </div>
+                        <div className="list-meta">{ticket.category}</div>
+                        <div className="list-meta">{ticket.taxonomy_terms.map((term) => term.label).join(", ") || "-"}</div>
+                        <div className="list-meta">Deadline {formatDate(ticket.deadline_at)}</div>
+                      </article>
+                    ))}
+                </div>
+              </section>
+            ))}
+          </div>
         </section>
       )}
 
@@ -1184,6 +1827,10 @@ function App() {
                 <p>
                   Geofence: {selectedTicket.geofence_radius_m}m | Deadline: {formatDate(selectedTicket.deadline_at)}
                 </p>
+                <p>
+                  Origin: {selectedTicket.origin} | Tags: {selectedTicket.taxonomy_terms.map((term) => term.label).join(", ") || "-"}
+                </p>
+                {selectedTicket.hint_note && <p>Hinweis: {selectedTicket.hint_note}</p>}
                 <div className="json-panel">
                   <strong>Proof Policy</strong>
                   <pre className="json-block">{JSON.stringify(selectedTicket.proof_policy_json, null, 2)}</pre>
@@ -1220,11 +1867,19 @@ function App() {
                       <input value={proofForm.gps_lng} onChange={(e) => setProofForm((v) => ({ ...v, gps_lng: e.target.value }))} />
                     </label>
                     <label>
-                      Aufnahmezeit
+                      Aufnahmezeit - Datum
                       <input
-                        type="datetime-local"
-                        value={proofForm.captured_at}
-                        onChange={(e) => setProofForm((v) => ({ ...v, captured_at: e.target.value }))}
+                        type="date"
+                        value={proofForm.captured_date}
+                        onChange={(e) => setProofForm((v) => ({ ...v, captured_date: e.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Aufnahmezeit - Uhrzeit
+                      <input
+                        type="time"
+                        value={proofForm.captured_time}
+                        onChange={(e) => setProofForm((v) => ({ ...v, captured_time: e.target.value }))}
                       />
                     </label>
                     <label>
@@ -1258,6 +1913,137 @@ function App() {
                 )}
               </>
             )}
+          </article>
+
+          <article className="card full-width">
+            <h3>W-00 Misstand melden (Bottom-up)</h3>
+            <p className="subtle">
+              Pflicht: Text + Standort + mindestens ein Foto. Der Hinweis wird als neues Klasse-2 Ticket angelegt.
+            </p>
+            <form onSubmit={onCreateHint} className="form-grid">
+              <label>
+                Projekt (Pflicht)
+                <select value={hintProjectId} onChange={(e) => setHintProjectId(e.target.value)} required>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Titel
+                <input value={hintForm.title} onChange={(e) => setHintForm((v) => ({ ...v, title: e.target.value }))} required />
+              </label>
+              <label>
+                Beschreibung (Pflicht)
+                <textarea
+                  value={hintForm.description}
+                  onChange={(e) => setHintForm((v) => ({ ...v, description: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Kategorie
+                <input
+                  value={hintForm.category}
+                  onChange={(e) => setHintForm((v) => ({ ...v, category: e.target.value }))}
+                  required
+                />
+              </label>
+              <div className="pill-row">
+                {categoryPills.map((pill) => (
+                  <button
+                    key={`hint-${pill}`}
+                    type="button"
+                    className={`tag-pill ${hintForm.category === pill ? "active" : ""}`}
+                    onClick={() => setHintForm((v) => ({ ...v, category: pill }))}
+                  >
+                    {pill}
+                  </button>
+                ))}
+              </div>
+              <label>
+                Breitengrad
+                <input value={hintForm.location_lat} onChange={(e) => setHintForm((v) => ({ ...v, location_lat: e.target.value }))} required />
+              </label>
+              <label>
+                Laengengrad
+                <input value={hintForm.location_lng} onChange={(e) => setHintForm((v) => ({ ...v, location_lng: e.target.value }))} required />
+              </label>
+              <label>
+                Geofence Radius (m)
+                <input
+                  value={hintForm.geofence_radius_m}
+                  onChange={(e) => setHintForm((v) => ({ ...v, geofence_radius_m: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Beobachtet am (Datum, optional)
+                <input
+                  type="date"
+                  value={hintForm.observed_date}
+                  onChange={(e) => setHintForm((v) => ({ ...v, observed_date: e.target.value }))}
+                />
+              </label>
+              <label>
+                Beobachtet um (Uhrzeit, optional)
+                <input
+                  type="time"
+                  value={hintForm.observed_time}
+                  onChange={(e) => setHintForm((v) => ({ ...v, observed_time: e.target.value }))}
+                />
+              </label>
+              <label>
+                Deadline (Datum, optional)
+                <input
+                  type="date"
+                  value={hintForm.deadline_date}
+                  onChange={(e) => setHintForm((v) => ({ ...v, deadline_date: e.target.value }))}
+                />
+              </label>
+              <label>
+                Deadline (Uhrzeit, optional)
+                <input
+                  type="time"
+                  value={hintForm.deadline_time}
+                  onChange={(e) => setHintForm((v) => ({ ...v, deadline_time: e.target.value }))}
+                />
+              </label>
+              <label>
+                Taxonomie-Tags
+                <select
+                  multiple
+                  value={hintForm.taxonomy_term_ids}
+                  onChange={(e) => {
+                    const ids = Array.from(e.target.selectedOptions).map((option) => option.value);
+                    setHintForm((v) => ({ ...v, taxonomy_term_ids: ids }));
+                  }}
+                >
+                  {taxonomyTerms
+                    .filter((term) => term.active)
+                    .map((term) => (
+                      <option key={`hint-term-${term.id}`} value={term.id}>
+                        {term.domain}: {term.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Fotos (Pflicht)
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => setHintForm((v) => ({ ...v, files: Array.from(e.target.files ?? []) }))}
+                  required
+                />
+              </label>
+              <button type="submit" disabled={loading}>
+                Hinweis als Ticket erstellen
+              </button>
+            </form>
           </article>
         </section>
       )}
@@ -1578,6 +2364,45 @@ function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </article>
+        </section>
+      )}
+
+      {view === "help" && (
+        <section className="grid-two">
+          <article className="card">
+            <h3>Onboarding</h3>
+            <ol className="timeline">
+              <li>
+                <span>1. Projekt waehlen</span>
+                <span>Jede Aufgabe ist einem Projekt zugeordnet.</span>
+              </li>
+              <li>
+                <span>2. Ticket erstellen oder Hinweis melden</span>
+                <span>Requester erstellt Aufgaben, Worker melden Misstaende bottom-up.</span>
+              </li>
+              <li>
+                <span>3. Umsetzung mit Proof</span>
+                <span>Fotos, Standort und Zeit erfassen; QA prueft die Nachweise.</span>
+              </li>
+              <li>
+                <span>4. Kanban und Exporte</span>
+                <span>Statusuebersicht per Board, KA5-nahe CSV/JSON Exporte fuer Drittsysteme.</span>
+              </li>
+            </ol>
+          </article>
+          <article className="card">
+            <h3>FAQ / Hilfe</h3>
+            <div className="faq-list">
+              <h4>Warum sehe ich frueher \"invalid datetime\"?</h4>
+              <p>Die App nutzt jetzt getrennte Datum/Uhrzeit-Felder und sendet normalisierte ISO-Zeitstempel.</p>
+              <h4>Was trage ich bei Kategorie ein?</h4>
+              <p>Nutze die Tag-Pills: Vegetation, Boden, Abfall, Erosion, Wasser, Sicherheit, Bohrstock, Luzerne, Schadstelle, Monitoring.</p>
+              <h4>Wer bekommt Klasse-3 Hinweise?</h4>
+              <p>Benachrichtigungen gehen an QA und fachliche Requester-Rolle.</p>
+              <h4>Wie finde ich Luzerne-Faelle?</h4>
+              <p>In der Ticketliste/kanban ueber Taxonomie-Filter oder Suchfeld \"Luzerne\" plus Datumsfilter.</p>
             </div>
           </article>
         </section>

@@ -83,3 +83,44 @@ Datum: 2026-02-21
 18. Karten-Preview im MVP
 - Unklarheit: UI-Flow fordert Kartenansichten, ohne feste Kartenbibliothek im Tech-Stack.
 - Entscheidung: Karte wird als leichte Static-Map-Preview (OpenStreetMap Static Map) in Requester/Worker/QA Screens gerendert.
+
+19. Projektpflicht fuer Aufgaben
+- Unklarheit: Bisher war `tickets.project_id` optional.
+- Entscheidung: `project_id` ist verpflichtend fuer alle Ticket-Arten (auch Bottom-up Hinweise).
+- Folge: Runtime-Migration weist bestehende Tickets ohne Projekt einem Fallback-Projekt zu.
+
+20. Bottom-up Hinweisfluss (Klasse 2)
+- Unklarheit: Wie Worker Misstaende als Ticket melden sollen.
+- Entscheidung: Neuer Endpoint `POST /tickets/hints` fuer WORKER, erzeugt Klasse-2 Ticket in `NEW` mit `origin=BOTTOM_UP_HINT`.
+- Pflichtfelder: Text + Standort + mindestens 1 Foto.
+
+21. Datetime UX / API-Normalisierung
+- Unklarheit: `datetime-local` fuehrte zu `invalid datetime` und uneinheitlichen Zeitzonen.
+- Entscheidung: UI nutzt getrennte Datum/Uhrzeit Felder; API erhaelt normalisierte ISO-UTC Timestamps.
+
+22. Taxonomie-Modell
+- Unklarheit: Freitext vs kontrollierter Katalog.
+- Entscheidung: Zentrale kontrollierte Taxonomie (`taxonomy_terms`, `ticket_taxonomy`) mit Admin-Pflege.
+- Folge: Suche/Filter nach Taxonomie und Datum in `GET /tickets`.
+
+23. Kanban Governance
+- Unklarheit: Freies Verschieben vs strikte Prozessfuehrung.
+- Entscheidung: Neues `POST /tickets/{id}/move` mit Status-Maschine + rollenbasierter Berechtigung.
+- Folge: Drag&Drop bleibt streng servervalidiert.
+
+24. Push-Zielgruppe Klasse 3
+- Unklarheit: Welche Empfaenger fuer Klasse-3-relevante Ereignisse.
+- Entscheidung: Notification-Events fuer Rollen `QA` und `REQUESTER`.
+- Implementierung: `push_subscriptions` + `notification_events` als MVP-Basis.
+
+25. KA5 Interop im MVP
+- Unklarheit: Vollstaendige Integrations-API vs pragmatischer Export.
+- Entscheidung: KA5-nahe Exportprofile via `GET /exports/ka5.csv` und `GET /exports/ka5.json`.
+
+26. Fachkraft-Rollenmapping
+- Unklarheit: Eigene Rolle "Fachkraft".
+- Entscheidung: Im MVP wird Fachkraft auf bestehende Rolle `REQUESTER` gemappt.
+
+27. Bohrstock-Erweiterung
+- Unklarheit: Freitext oder strukturierte Felder fuer Probenentnahme.
+- Entscheidung: Template "Probenentnahme mit Bohrstock" mit strukturierten Pflichtfeldern (Tiefe, Horizont, Feuchte, etc.).

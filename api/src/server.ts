@@ -3,14 +3,17 @@ import path from "node:path";
 import { createApp } from "./app";
 import { config } from "./lib/config";
 import { waitForDatabase } from "./lib/db";
-import { ensureDemoProjects, ensureDemoTemplates, ensureDemoUsers } from "./lib/seed";
+import { ensureRuntimeSchema } from "./lib/migrate";
+import { ensureDemoProjects, ensureDemoTaxonomyTerms, ensureDemoTemplates, ensureDemoUsers } from "./lib/seed";
 
 async function bootstrap() {
   fs.mkdirSync(path.resolve(config.UPLOAD_DIR), { recursive: true });
   await waitForDatabase();
   await ensureDemoUsers();
+  await ensureRuntimeSchema();
   await ensureDemoTemplates();
   await ensureDemoProjects();
+  await ensureDemoTaxonomyTerms();
 
   const app = createApp();
   app.listen(config.PORT, () => {

@@ -52,19 +52,48 @@ const demoTemplates = [
     geofenceRadiusM: 50
   },
   {
-    name: "Probenentnahme nach Anleitung",
-    category: "Probenentnahme SOP",
+    name: "Probenentnahme mit Bohrstock",
+    category: "Probenentnahme - Bohrstock",
     taskClass: 3,
     checklist: {
-      fields: [{ key: "hinweis", type: "text", required: true }]
+      fields: [
+        { key: "bohrstock_typ", type: "enum", required: true, options: ["Puerckhauer", "Edelman", "Andere"] },
+        { key: "bohrtiefe_cm", type: "number", required: true },
+        { key: "horizont_code", type: "string", required: true },
+        { key: "bodenfeuchte", type: "enum", required: true, options: ["trocken", "frisch", "feucht", "nass"] },
+        { key: "probe_entnommen", type: "boolean", required: true },
+        { key: "kommentar", type: "text", required: false }
+      ]
     },
     proofPolicy: {
-      min_photos: 2,
+      min_photos: 3,
       require_gps: true,
-      required_fields: ["hinweis"]
+      redundancy: 1,
+      required_fields: ["bohrstock_typ", "bohrtiefe_cm", "horizont_code", "bodenfeuchte", "probe_entnommen"]
     },
     geofenceRadiusM: 25
   }
+] as const;
+
+const demoTaxonomyTerms = [
+  { domain: "vegetation", label: "Luzerne", slug: "vegetation-luzerne", orderIndex: 10 },
+  { domain: "vegetation", label: "Grasland", slug: "vegetation-grasland", orderIndex: 20 },
+  { domain: "incident_type", label: "Vandalismus", slug: "incident-vandalismus", orderIndex: 30 },
+  { domain: "incident_type", label: "Verschmutzung", slug: "incident-verschmutzung", orderIndex: 40 },
+  { domain: "waste_type", label: "Reifen", slug: "waste-reifen", orderIndex: 50 },
+  { domain: "waste_type", label: "Bauschutt", slug: "waste-bauschutt", orderIndex: 60 },
+  { domain: "method", label: "Bohrstock", slug: "method-bohrstock", orderIndex: 70 },
+  { domain: "urgency", label: "Niedrig", slug: "urgency-niedrig", orderIndex: 80 },
+  { domain: "urgency", label: "Mittel", slug: "urgency-mittel", orderIndex: 90 },
+  { domain: "urgency", label: "Hoch", slug: "urgency-hoch", orderIndex: 100 },
+  { domain: "theme", label: "Vegetation", slug: "theme-vegetation", orderIndex: 110 },
+  { domain: "theme", label: "Boden", slug: "theme-boden", orderIndex: 120 },
+  { domain: "theme", label: "Abfall", slug: "theme-abfall", orderIndex: 130 },
+  { domain: "theme", label: "Erosion", slug: "theme-erosion", orderIndex: 140 },
+  { domain: "theme", label: "Wasser", slug: "theme-wasser", orderIndex: 150 },
+  { domain: "theme", label: "Sicherheit", slug: "theme-sicherheit", orderIndex: 160 },
+  { domain: "theme", label: "Schadstelle", slug: "theme-schadstelle", orderIndex: 170 },
+  { domain: "theme", label: "Monitoring", slug: "theme-monitoring", orderIndex: 180 }
 ] as const;
 
 export async function ensureDemoUsers(): Promise<void> {
@@ -128,4 +157,22 @@ export async function ensureDemoProjects(): Promise<void> {
       "Vorseed fuer Projekt-Filter und Projekt-Report im MVP"
     ]
   );
+}
+
+export async function ensureDemoTaxonomyTerms(): Promise<void> {
+  for (const term of demoTaxonomyTerms) {
+    await pool.query(
+      `
+      INSERT INTO taxonomy_terms (domain, label, slug, active, order_index)
+      VALUES ($1, $2, $3, true, $4)
+      ON CONFLICT (slug) DO UPDATE
+      SET
+        domain = EXCLUDED.domain,
+        label = EXCLUDED.label,
+        active = true,
+        order_index = EXCLUDED.order_index
+      `,
+      [term.domain, term.label, term.slug, term.orderIndex]
+    );
+  }
 }

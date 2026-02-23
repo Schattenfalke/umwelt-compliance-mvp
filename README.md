@@ -45,12 +45,19 @@ Umweltauflagen erzeugen kleinteilige, wiederkehrende Feldaufgaben. Ohne Plattfor
 ## MVP-Funktionen
 
 - Ticket erstellen (Ort, Geofence, Deadline, Proof-Policy)
+- Projektpflicht fuer alle Tickets
 - Mission Feed (Karte/Liste nach Distanz)
+- Bottom-up Hinweis durch Worker (Text + Standort + Foto) -> Ticket in `NEW`
+- Kanban-Board mit Drag&Drop Status-Updates (serverseitig RBAC + State-Machine validiert)
+- Zentrale Taxonomie-Tags und kombinierte Suche (z. B. Luzerne + Datum)
 - Ticket annehmen plus Checkliste
 - Proof Upload (Foto + GPS + Metadaten)
 - QA Review (Freigabe / Nachforderung / Ablehnung / Eskalation)
 - Audit-Trail (jede Statusaenderung nachvollziehbar)
 - PDF Report
+- KA5-nahe Exporte (`/exports/ka5.csv`, `/exports/ka5.json`)
+- PWA-Basis (installierbar, Service Worker, Push-Subscription-Basis)
+- In-App Hilfe (Onboarding + FAQ)
 
 ---
 
@@ -131,6 +138,17 @@ Demo-Zugaenge:
 - API-Endpunkt fuer Proof-Dateistreaming (`GET /proofs/{proofId}/files/{fileId}`) hinzugefuegt
 - Worker Mission Feed und Requester Ticket-Create um Karten-Preview erweitert
 
+### Sprint 5 (abgeschlossen)
+- Projektpflicht technisch durchgesetzt (`tickets.project_id` NOT NULL inkl. Runtime-Migration)
+- Date/Time-UX ueberarbeitet: getrennte Datum/Uhrzeit-Felder, API-Normalisierung auf ISO UTC
+- Worker-Hinweisfluss erweitert: `POST /tickets/hints` mit Pflichtfeldern Text + Standort + Foto
+- Taxonomie-Modell eingefuehrt (`taxonomy_terms`, `ticket_taxonomy`) inkl. Filter/Suche in `GET /tickets`
+- Kanban-Endpoint (`POST /tickets/{ticketId}/move`) + Web-Board mit Drag&Drop umgesetzt
+- Push-Basis umgesetzt (`push_subscriptions`, `notification_events`) inkl. Klasse-3 Routing (QA + Requester)
+- KA5-nahe Exportprofile als CSV/JSON umgesetzt (`/exports/ka5.csv`, `/exports/ka5.json`)
+- Bohrstock-Template auf strukturierte Felder erweitert
+- Hilfebereich in der App umgesetzt (Onboarding + FAQ)
+
 ---
 
 ## Pilot-Use-Case: Vegetations-/Bodenschutz-Monitoring
@@ -153,12 +171,13 @@ Regelmaessige Fotodokumentation an definierten Geo-Punkten (alle 14 Tage):
 | Sprint 2 | abgeschlossen | Proof Upload, QA Review, PDF Report |
 | Sprint 3 | abgeschlossen | KPIs, Templates, Hardening-Bausteine |
 | Sprint 4 | abgeschlossen | EXIF, Redundanz, QA Viewer, Karten-Previews |
+| Sprint 5 | abgeschlossen | Projektpflicht, Taxonomie, Kanban, Hint-Flow, PWA/Push, KA5-Export, Hilfe |
 
 ---
 
 ## Status
 
-MVP ist funktionsfaehig umgesetzt (Sprints 0 bis 4).
+MVP ist funktionsfaehig umgesetzt (Sprints 0 bis 5).
 
 ---
 

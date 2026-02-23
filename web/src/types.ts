@@ -1,5 +1,16 @@
 export type Role = "ADMIN" | "REQUESTER" | "WORKER" | "QA";
 
+export type TaxonomyTerm = {
+  id: string;
+  domain: string;
+  label: string;
+  slug: string;
+  active: boolean;
+  order_index: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TicketStatus =
   | "NEW"
   | "QUALIFIED"
@@ -13,12 +24,14 @@ export type TicketStatus =
 
 export type Ticket = {
   id: string;
-  project_id: string | null;
+  project_id: string;
   creator_user_id: string;
   title: string;
   description: string;
   category: string;
   task_class: number;
+  origin: "TOP_DOWN" | "BOTTOM_UP_HINT";
+  hint_note: string | null;
   status: TicketStatus;
   location_lat: number;
   location_lng: number;
@@ -30,6 +43,7 @@ export type Ticket = {
   safety_flags_json: Record<string, unknown>;
   accepted_by_user_id: string | null;
   accepted_at: string | null;
+  taxonomy_terms: TaxonomyTerm[];
   created_at: string;
   updated_at: string;
 };
@@ -131,4 +145,27 @@ export type QaQueueEntry = {
   submitted_at: string;
   validation_flags_json: Record<string, unknown>;
   qa_status: string;
+};
+
+export type PushSubscription = {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  user_agent: string | null;
+  created_at: string;
+};
+
+export type NotificationEvent = {
+  id: string;
+  user_id: string;
+  ticket_id: string | null;
+  event_type: string;
+  title: string;
+  body: string;
+  payload_json: Record<string, unknown>;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
 };

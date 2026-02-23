@@ -15,6 +15,7 @@ import { assertTransition } from "../lib/statusMachine";
 import { buildValidationFlags, haversineDistanceMeters } from "../lib/geoTimeValidation";
 import { writeStatusEvent } from "../lib/audit";
 import { checkSlidingWindowRateLimit } from "../lib/rateLimit";
+import { hasPermission, type Permission } from "../lib/rbac";
 import { ProofPolicy, QaDecision, QA_DECISIONS, Role, TicketStatus } from "../types";
 
 const jpegExif: { fromBuffer: (buffer: Buffer) => Record<string, unknown> | undefined } = require("jpeg-exif");
@@ -24,9 +25,23 @@ const loginSchema = z.object({
   password: z.string().min(1)
 });
 
+const requiredDatetimeSchema = z.string().trim().min(1).refine((value) => !Number.isNaN(new Date(value).getTime()), {
+  message: "must be a valid datetime"
+});
+
+const optionalDatetimeSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => !Number.isNaN(new Date(value).getTime()), {
+    message: "must be a valid datetime"
+  })
+  .nullable()
+  .optional();
+
 const ticketCreateSchema = z
   .object({
-    project_id: z.string().uuid().nullable().optional(),
+    project_id: z.string().uuid(),
     template_id: z.string().uuid().nullable().optional(),
     title: z.string().min(1),
     description: z.string().optional().default(""),
@@ -35,11 +50,14 @@ const ticketCreateSchema = z
     location_lat: z.number().min(-90).max(90),
     location_lng: z.number().min(-180).max(180),
     geofence_radius_m: z.number().int().min(5).max(2000).optional(),
-    time_window_start: z.string().datetime().nullable().optional(),
-    time_window_end: z.string().datetime().nullable().optional(),
-    deadline_at: z.string().datetime(),
+    time_window_start: optionalDatetimeSchema,
+    time_window_end: optionalDatetimeSchema,
+    deadline_at: requiredDatetimeSchema,
     proof_policy_json: z.record(z.any()).optional(),
-    safety_flags_json: z.record(z.any()).optional().default({})
+    safety_flags_json: z.record(z.any()).optional().default({}),
+    taxonomy_term_ids: z.array(z.string().uuid()).optional().default([]),
+    origin: z.enum(["TOP_DOWN", "BOTTOM_UP_HINT"]).optional().default("TOP_DOWN"),
+    hint_note: z.string().max(2000).optional().default("")
   })
   .superRefine((value, ctx) => {
     const now = Date.now();
@@ -63,6 +81,19 @@ const ticketCreateSchema = z
       }
     }
   });
+
+const workerHintSchema = z.object({
+  project_id: z.string().uuid(),
+  title: z.string().min(3).max(200),
+  description: z.string().min(1).max(3000),
+  category: z.string().min(1).max(150),
+  location_lat: z.coerce.number().min(-90).max(90),
+  location_lng: z.coerce.number().min(-180).max(180),
+  geofence_radius_m: z.coerce.number().int().min(5).max(2000).optional().default(25),
+  deadline_at: optionalDatetimeSchema,
+  observed_at: optionalDatetimeSchema,
+  taxonomy_term_ids_json: z.string().optional().default("[]")
+});
 
 const templateCreateSchema = z.object({
   name: z.string().min(1),
@@ -97,14 +128,53 @@ const qaDecisionSchema = z.object({
   comment: z.string().optional().default("")
 });
 
+const kanbanMoveSchema = z.object({
+  to_status: z.enum([
+    "QUALIFIED",
+    "PUBLISHED",
+    "ACCEPTED",
+    "PROOF_SUBMITTED",
+    "NEEDS_CHANGES",
+    "COMPLETED",
+    "REJECTED",
+    "ARCHIVED"
+  ])
+});
+
+const taxonomyCreateSchema = z.object({
+  domain: z.string().min(1).max(100),
+  label: z.string().min(1).max(120),
+  slug: z.string().min(1).max(160).regex(/^[a-z0-9-]+$/),
+  active: z.boolean().optional().default(true),
+  order_index: z.number().int().min(0).optional().default(0)
+});
+
+const taxonomyPatchSchema = z.object({
+  domain: z.string().min(1).max(100).optional(),
+  label: z.string().min(1).max(120).optional(),
+  slug: z.string().min(1).max(160).regex(/^[a-z0-9-]+$/).optional(),
+  active: z.boolean().optional(),
+  order_index: z.number().int().min(0).optional()
+});
+
+const pushSubscriptionSchema = z.object({
+  endpoint: z.string().min(1),
+  keys: z.object({
+    p256dh: z.string().min(1),
+    auth: z.string().min(1)
+  })
+});
+
 type DbTicket = {
   id: string;
-  project_id: string | null;
+  project_id: string;
   creator_user_id: string;
   title: string;
   description: string | null;
   category: string;
   task_class: number;
+  origin: "TOP_DOWN" | "BOTTOM_UP_HINT";
+  hint_note: string | null;
   status: TicketStatus;
   location_lat: number;
   location_lng: number;
@@ -118,6 +188,10 @@ type DbTicket = {
   accepted_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type DbTicketWithTaxonomy = DbTicket & {
+  taxonomy_terms: DbTaxonomyTerm[];
 };
 
 type DbProof = {
@@ -155,6 +229,40 @@ type DbTemplate = {
   proof_policy_json: Record<string, unknown>;
   default_geofence_radius_m: number;
   created_at: string;
+};
+
+type DbTaxonomyTerm = {
+  id: string;
+  domain: string;
+  label: string;
+  slug: string;
+  active: boolean;
+  order_index: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type DbPushSubscription = {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  user_agent: string | null;
+  created_at: string;
+};
+
+type DbNotificationEvent = {
+  id: string;
+  user_id: string;
+  ticket_id: string | null;
+  event_type: string;
+  title: string;
+  body: string;
+  payload_json: Record<string, unknown>;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
 };
 
 type DbProofFile = {
@@ -289,6 +397,44 @@ function extractExifMetadata(buffer: Buffer): {
   }
 }
 
+function parseJsonStringArray(input: string, fieldName: string): string[] {
+  try {
+    const parsed = JSON.parse(input);
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+      throw new Error("invalid");
+    }
+    return parsed as string[];
+  } catch (_error) {
+    throw new Error(`BAD_REQUEST:${fieldName} must be a JSON string array`);
+  }
+}
+
+function normalizeToIsoString(value: string, fieldName: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`BAD_REQUEST:${fieldName} must be a valid datetime`);
+  }
+  return parsed.toISOString();
+}
+
+function toCsvCell(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+  const text = String(value);
+  if (!/[",\n]/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/"/g, "\"\"")}"`;
+}
+
+async function assertProjectExists(projectId: string): Promise<void> {
+  const result = await pool.query("SELECT id FROM projects WHERE id = $1", [projectId]);
+  if (!result.rows[0]) {
+    throw new Error("BAD_REQUEST:project_id does not exist");
+  }
+}
+
 async function getTicketOrThrow(ticketId: string): Promise<DbTicket> {
   const result = await pool.query<DbTicket>("SELECT * FROM tickets WHERE id = $1", [ticketId]);
   const ticket = result.rows[0];
@@ -305,6 +451,90 @@ async function getTemplateOrThrow(templateId: string): Promise<DbTemplate> {
     throw new Error("NOT_FOUND:Template not found");
   }
   return template;
+}
+
+async function assertActiveTaxonomyTerms(termIds: string[]): Promise<void> {
+  if (termIds.length === 0) {
+    return;
+  }
+
+  const result = await pool.query<{ id: string }>(
+    "SELECT id FROM taxonomy_terms WHERE active = true AND id = ANY($1::uuid[])",
+    [termIds]
+  );
+
+  if (result.rows.length !== termIds.length) {
+    throw new Error("BAD_REQUEST:One or more taxonomy terms are invalid or inactive");
+  }
+}
+
+async function replaceTicketTaxonomy(ticketId: string, termIds: string[]): Promise<void> {
+  await pool.query("DELETE FROM ticket_taxonomy WHERE ticket_id = $1", [ticketId]);
+
+  if (termIds.length === 0) {
+    return;
+  }
+
+  await pool.query(
+    `
+    INSERT INTO ticket_taxonomy (ticket_id, term_id)
+    SELECT $1, term_id
+    FROM UNNEST($2::uuid[]) AS term_id
+    `,
+    [ticketId, termIds]
+  );
+}
+
+async function hydrateTicketTaxonomy(rows: DbTicket[]): Promise<DbTicketWithTaxonomy[]> {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const ticketIds = rows.map((row) => row.id);
+  const termsResult = await pool.query<DbTaxonomyTerm & { ticket_id: string }>(
+    `
+    SELECT
+      tt.ticket_id,
+      t.id,
+      t.domain,
+      t.label,
+      t.slug,
+      t.active,
+      t.order_index,
+      t.created_at,
+      t.updated_at
+    FROM ticket_taxonomy tt
+    JOIN taxonomy_terms t ON t.id = tt.term_id
+    WHERE tt.ticket_id = ANY($1::uuid[])
+    ORDER BY t.domain ASC, t.order_index ASC, t.label ASC
+    `,
+    [ticketIds]
+  );
+
+  const bucket = new Map<string, DbTaxonomyTerm[]>();
+  for (const term of termsResult.rows) {
+    const entry: DbTaxonomyTerm = {
+      id: term.id,
+      domain: term.domain,
+      label: term.label,
+      slug: term.slug,
+      active: term.active,
+      order_index: term.order_index,
+      created_at: term.created_at,
+      updated_at: term.updated_at
+    };
+    const existing = bucket.get(term.ticket_id);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      bucket.set(term.ticket_id, [entry]);
+    }
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    taxonomy_terms: bucket.get(row.id) ?? []
+  }));
 }
 
 async function listProofsByTicket(ticketId: string): Promise<Array<DbProof & { files: Array<Record<string, unknown>> }>> {
@@ -331,6 +561,65 @@ function checkCommentRequired(decision: QaDecision, comment: string): void {
   }
 }
 
+async function queueClassThreeNotifications(params: {
+  ticket: DbTicket;
+  actorUserId: string;
+  eventType: string;
+  body: string;
+  payload?: Record<string, unknown>;
+}): Promise<void> {
+  if (params.ticket.task_class !== 3) {
+    return;
+  }
+
+  const recipientsResult = await pool.query<{ id: string }>(
+    "SELECT id FROM users WHERE role = ANY($1::text[])",
+    [["QA", "REQUESTER"]]
+  );
+
+  for (const recipient of recipientsResult.rows) {
+    if (recipient.id === params.actorUserId) {
+      continue;
+    }
+
+    await pool.query(
+      `
+      INSERT INTO notification_events (user_id, ticket_id, event_type, title, body, payload_json)
+      VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+      `,
+      [
+        recipient.id,
+        params.ticket.id,
+        params.eventType,
+        `Klasse-3 Ticket: ${params.ticket.title}`,
+        params.body,
+        JSON.stringify(params.payload ?? {})
+      ]
+    );
+  }
+}
+
+function getKanbanPermissionForTargetStatus(toStatus: TicketStatus): Permission | null {
+  switch (toStatus) {
+    case "QUALIFIED":
+      return "ticket:qualify";
+    case "PUBLISHED":
+      return "ticket:publish";
+    case "ACCEPTED":
+      return "ticket:accept";
+    case "PROOF_SUBMITTED":
+      return "proof:submit";
+    case "NEEDS_CHANGES":
+    case "COMPLETED":
+    case "REJECTED":
+      return "proof:qa";
+    case "ARCHIVED":
+      return "ticket:publish";
+    default:
+      return null;
+  }
+}
+
 async function transitionTicketStatus(params: {
   ticketId: string;
   fromStatus: TicketStatus;
@@ -354,6 +643,19 @@ async function transitionTicketStatus(params: {
     toStatus: params.toStatus,
     eventType: params.eventType ?? "STATUS_CHANGE",
     payload: params.payload
+  });
+
+  const updatedTicket = await getTicketOrThrow(params.ticketId);
+  await queueClassThreeNotifications({
+    ticket: updatedTicket,
+    actorUserId: params.actorUserId,
+    eventType: params.eventType ?? "STATUS_CHANGE",
+    body: `Statuswechsel ${params.fromStatus} -> ${params.toStatus}`,
+    payload: {
+      from_status: params.fromStatus,
+      to_status: params.toStatus,
+      ...(params.payload ?? {})
+    }
   });
 }
 
@@ -545,6 +847,108 @@ export function registerRoutes(app: Express): void {
             changeRateDenominator > 0 ? Number(changeRate.requested_count) / changeRateDenominator : null
         }
       });
+    })
+  );
+
+  app.post(
+    "/push/subscriptions",
+    authorize("notification:subscribe"),
+    asyncHandler(async (req, res) => {
+      const payload = pushSubscriptionSchema.parse(req.body);
+      const result = await pool.query<DbPushSubscription>(
+        `
+        INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (user_id, endpoint) DO UPDATE
+        SET p256dh = EXCLUDED.p256dh,
+            auth = EXCLUDED.auth,
+            user_agent = EXCLUDED.user_agent
+        RETURNING *
+        `,
+        [req.user!.id, payload.endpoint, payload.keys.p256dh, payload.keys.auth, req.get("User-Agent") ?? null]
+      );
+      res.status(201).json(result.rows[0]);
+    })
+  );
+
+  app.get(
+    "/push/subscriptions",
+    authorize("notification:subscribe"),
+    asyncHandler(async (req, res) => {
+      const result = await pool.query<DbPushSubscription>(
+        "SELECT * FROM push_subscriptions WHERE user_id = $1 ORDER BY created_at DESC",
+        [req.user!.id]
+      );
+      res.json(result.rows);
+    })
+  );
+
+  app.delete(
+    "/push/subscriptions/:subscriptionId",
+    authorize("notification:subscribe"),
+    asyncHandler(async (req, res) => {
+      const deleted = await pool.query<{ id: string }>(
+        "DELETE FROM push_subscriptions WHERE id = $1 AND user_id = $2 RETURNING id",
+        [req.params.subscriptionId, req.user!.id]
+      );
+      if (!deleted.rows[0]) {
+        throw new Error("NOT_FOUND:Push subscription not found");
+      }
+      res.status(204).send();
+    })
+  );
+
+  app.get(
+    "/notifications",
+    authorize("notification:read"),
+    asyncHandler(async (req, res) => {
+      const unreadOnly = req.query.unread_only !== "false";
+      const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : 30;
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 30;
+
+      const whereParts = ["user_id = $1"];
+      const params: unknown[] = [req.user!.id];
+      if (unreadOnly) {
+        whereParts.push("is_read = false");
+      }
+      params.push(limit);
+
+      const result = await pool.query<DbNotificationEvent>(
+        `
+        SELECT *
+        FROM notification_events
+        WHERE ${whereParts.join(" AND ")}
+        ORDER BY created_at DESC
+        LIMIT $2
+        `,
+        params
+      );
+
+      res.json(result.rows);
+    })
+  );
+
+  app.post(
+    "/notifications/:notificationId/read",
+    authorize("notification:read"),
+    asyncHandler(async (req, res) => {
+      const result = await pool.query<DbNotificationEvent>(
+        `
+        UPDATE notification_events
+        SET is_read = true,
+            read_at = now()
+        WHERE id = $1
+          AND user_id = $2
+        RETURNING *
+        `,
+        [req.params.notificationId, req.user!.id]
+      );
+
+      if (!result.rows[0]) {
+        throw new Error("NOT_FOUND:Notification not found");
+      }
+
+      res.json(result.rows[0]);
     })
   );
 
@@ -742,11 +1146,111 @@ export function registerRoutes(app: Express): void {
   );
 
   app.get(
+    "/taxonomy/terms",
+    authorize("taxonomy:read"),
+    asyncHandler(async (req, res) => {
+      const domainFilter = typeof req.query.domain === "string" ? req.query.domain : null;
+      const qFilter = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : null;
+      const includeInactive = req.query.include_inactive === "true";
+
+      const where: string[] = [];
+      const params: unknown[] = [];
+
+      if (domainFilter) {
+        params.push(domainFilter);
+        where.push(`domain = $${params.length}`);
+      }
+
+      if (!includeInactive) {
+        where.push("active = true");
+      }
+
+      if (qFilter) {
+        params.push(`%${qFilter}%`);
+        where.push(`LOWER(label) LIKE $${params.length}`);
+      }
+
+      const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+      const result = await pool.query<DbTaxonomyTerm>(
+        `SELECT * FROM taxonomy_terms ${whereClause} ORDER BY domain ASC, order_index ASC, label ASC`,
+        params
+      );
+      res.json(result.rows);
+    })
+  );
+
+  app.post(
+    "/taxonomy/terms",
+    authorize("taxonomy:write"),
+    asyncHandler(async (req, res) => {
+      const payload = taxonomyCreateSchema.parse(req.body);
+      const result = await pool.query<DbTaxonomyTerm>(
+        `
+        INSERT INTO taxonomy_terms (domain, label, slug, active, order_index)
+        VALUES ($1,$2,$3,$4,$5)
+        RETURNING *
+        `,
+        [payload.domain, payload.label, payload.slug, payload.active, payload.order_index]
+      );
+      res.status(201).json(result.rows[0]);
+    })
+  );
+
+  app.patch(
+    "/taxonomy/terms/:termId",
+    authorize("taxonomy:write"),
+    asyncHandler(async (req, res) => {
+      const payload = taxonomyPatchSchema.parse(req.body ?? {});
+      const hasAnyField =
+        payload.domain !== undefined ||
+        payload.label !== undefined ||
+        payload.slug !== undefined ||
+        payload.active !== undefined ||
+        payload.order_index !== undefined;
+      if (!hasAnyField) {
+        throw new Error("BAD_REQUEST:No taxonomy fields provided");
+      }
+
+      const result = await pool.query<DbTaxonomyTerm>(
+        `
+        UPDATE taxonomy_terms
+        SET
+          domain = COALESCE($1, domain),
+          label = COALESCE($2, label),
+          slug = COALESCE($3, slug),
+          active = COALESCE($4, active),
+          order_index = COALESCE($5, order_index)
+        WHERE id = $6
+        RETURNING *
+        `,
+        [
+          payload.domain ?? null,
+          payload.label ?? null,
+          payload.slug ?? null,
+          payload.active ?? null,
+          payload.order_index ?? null,
+          req.params.termId
+        ]
+      );
+
+      if (!result.rows[0]) {
+        throw new Error("NOT_FOUND:Taxonomy term not found");
+      }
+
+      res.json(result.rows[0]);
+    })
+  );
+
+  app.get(
     "/tickets",
     authorize("ticket:list"),
     asyncHandler(async (req, res) => {
       const statusFilter = typeof req.query.status === "string" ? req.query.status : null;
       const projectFilter = typeof req.query.project_id === "string" ? req.query.project_id : null;
+      const taxonomyTermIdsRaw = typeof req.query.taxonomy_term_ids === "string" ? req.query.taxonomy_term_ids : null;
+      const taxonomyQuery = typeof req.query.taxonomy_query === "string" ? req.query.taxonomy_query.trim() : null;
+      const dateFromRaw = typeof req.query.date_from === "string" ? req.query.date_from : null;
+      const dateToRaw = typeof req.query.date_to === "string" ? req.query.date_to : null;
       const nearLat = typeof req.query.near_lat === "string" ? Number(req.query.near_lat) : null;
       const nearLng = typeof req.query.near_lng === "string" ? Number(req.query.near_lng) : null;
       const nearRadiusKm =
@@ -755,23 +1259,69 @@ export function registerRoutes(app: Express): void {
       const params: unknown[] = [];
       const whereParts: string[] = [];
 
+      const taxonomyTermIds =
+        taxonomyTermIdsRaw == null || taxonomyTermIdsRaw.trim() === ""
+          ? []
+          : taxonomyTermIdsRaw
+              .split(",")
+              .map((value) => value.trim())
+              .filter((value) => value.length > 0);
+
       if (statusFilter) {
         params.push(statusFilter);
-        whereParts.push(`status = $${params.length}`);
+        whereParts.push(`t.status = $${params.length}`);
       }
 
       if (projectFilter) {
         params.push(projectFilter);
-        whereParts.push(`project_id = $${params.length}`);
+        whereParts.push(`t.project_id = $${params.length}`);
+      }
+
+      if (taxonomyTermIds.length > 0) {
+        params.push(taxonomyTermIds);
+        whereParts.push(`t.id IN (SELECT ticket_id FROM ticket_taxonomy WHERE term_id = ANY($${params.length}::uuid[]))`);
+      }
+
+      if (taxonomyQuery) {
+        params.push(`%${taxonomyQuery.toLowerCase()}%`);
+        whereParts.push(`t.id IN (
+          SELECT tt.ticket_id
+          FROM ticket_taxonomy tt
+          JOIN taxonomy_terms tx ON tx.id = tt.term_id
+          WHERE LOWER(tx.label) LIKE $${params.length}
+        )`);
+      }
+
+      if (dateFromRaw) {
+        const parsed = new Date(dateFromRaw);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("BAD_REQUEST:date_from must be a valid date");
+        }
+        params.push(parsed.toISOString());
+        whereParts.push(`t.created_at >= $${params.length}`);
+      }
+
+      if (dateToRaw) {
+        const parsed = new Date(dateToRaw);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("BAD_REQUEST:date_to must be a valid date");
+        }
+        params.push(parsed.toISOString());
+        whereParts.push(`t.created_at <= $${params.length}`);
       }
 
       if (req.user?.role === "WORKER" && !statusFilter) {
         params.push(req.user.id);
-        whereParts.push(`(status = 'PUBLISHED' OR (status IN ('ACCEPTED', 'NEEDS_CHANGES') AND accepted_by_user_id = $${params.length}))`);
+        whereParts.push(
+          `(t.status = 'PUBLISHED' OR (t.status IN ('ACCEPTED', 'NEEDS_CHANGES') AND t.accepted_by_user_id = $${params.length}))`
+        );
       }
 
       const whereClause = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
-      const result = await pool.query<DbTicket>(`SELECT * FROM tickets ${whereClause} ORDER BY created_at DESC`, params);
+      const result = await pool.query<DbTicket>(
+        `SELECT t.* FROM tickets t ${whereClause} ORDER BY t.created_at DESC`,
+        params
+      );
 
       let rows = result.rows;
       if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
@@ -789,7 +1339,8 @@ export function registerRoutes(app: Express): void {
         rows = distancedRows;
       }
 
-      res.json(rows);
+      const hydrated = await hydrateTicketTaxonomy(rows);
+      res.json(hydrated);
     })
   );
 
@@ -799,11 +1350,20 @@ export function registerRoutes(app: Express): void {
     asyncHandler(async (req, res) => {
       const payload = ticketCreateSchema.parse(req.body);
       const template = payload.template_id ? await getTemplateOrThrow(payload.template_id) : null;
+      await assertProjectExists(payload.project_id);
 
       const category = payload.category ?? template?.category;
       const taskClass = payload.task_class ?? template?.task_class;
       const geofenceRadiusM = payload.geofence_radius_m ?? template?.default_geofence_radius_m;
       const proofPolicy = payload.proof_policy_json ?? template?.proof_policy_json ?? {};
+      const normalizedDeadlineAt = normalizeToIsoString(payload.deadline_at, "deadline_at");
+      const normalizedWindowStart = payload.time_window_start
+        ? normalizeToIsoString(payload.time_window_start, "time_window_start")
+        : null;
+      const normalizedWindowEnd = payload.time_window_end
+        ? normalizeToIsoString(payload.time_window_end, "time_window_end")
+        : null;
+      const taxonomyTermIds = Array.from(new Set(payload.taxonomy_term_ids));
 
       if (!category) {
         throw new Error("BAD_REQUEST:category is required");
@@ -815,6 +1375,8 @@ export function registerRoutes(app: Express): void {
         throw new Error("BAD_REQUEST:geofence_radius_m is required");
       }
 
+      await assertActiveTaxonomyTerms(taxonomyTermIds);
+
       const insertResult = await pool.query<DbTicket>(
         `
         INSERT INTO tickets (
@@ -824,6 +1386,8 @@ export function registerRoutes(app: Express): void {
           description,
           category,
           task_class,
+          origin,
+          hint_note,
           status,
           location_lat,
           location_lng,
@@ -835,29 +1399,32 @@ export function registerRoutes(app: Express): void {
           safety_flags_json
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,'NEW',$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb
+          $1,$2,$3,$4,$5,$6,$7,$8,'NEW',$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb
         )
         RETURNING *
         `,
         [
-          payload.project_id ?? null,
+          payload.project_id,
           req.user!.id,
           payload.title,
           payload.description,
           category,
           taskClass,
+          payload.origin,
+          payload.hint_note || null,
           payload.location_lat,
           payload.location_lng,
           geofenceRadiusM,
-          payload.time_window_start ?? null,
-          payload.time_window_end ?? null,
-          payload.deadline_at,
+          normalizedWindowStart,
+          normalizedWindowEnd,
+          normalizedDeadlineAt,
           JSON.stringify(proofPolicy),
           JSON.stringify(payload.safety_flags_json)
         ]
       );
 
       const ticket = insertResult.rows[0];
+      await replaceTicketTaxonomy(ticket.id, taxonomyTermIds);
       await writeStatusEvent({
         ticketId: ticket.id,
         actorUserId: req.user!.id,
@@ -870,7 +1437,212 @@ export function registerRoutes(app: Express): void {
         }
       });
 
-      res.status(201).json(ticket);
+      await queueClassThreeNotifications({
+        ticket,
+        actorUserId: req.user!.id,
+        eventType: "TICKET_CREATED",
+        body: "Neues Klasse-3 Ticket angelegt",
+        payload: {
+          ticket_id: ticket.id,
+          origin: ticket.origin
+        }
+      });
+
+      const hydrated = await hydrateTicketTaxonomy([ticket]);
+      res.status(201).json(hydrated[0]);
+    })
+  );
+
+  app.post(
+    "/tickets/hints",
+    authorize("ticket:hint:create"),
+    upload.array("files", 6),
+    asyncHandler(async (req, res) => {
+      const payload = workerHintSchema.parse(req.body);
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+
+      if (files.length < 1) {
+        throw new Error("BAD_REQUEST:At least one photo is required for a hint ticket");
+      }
+
+      await assertProjectExists(payload.project_id);
+      const taxonomyTermIds = Array.from(
+        new Set(parseJsonStringArray(payload.taxonomy_term_ids_json, "taxonomy_term_ids_json"))
+      );
+      await assertActiveTaxonomyTerms(taxonomyTermIds);
+
+      const observedAt = payload.observed_at
+        ? normalizeToIsoString(payload.observed_at, "observed_at")
+        : new Date().toISOString();
+      const deadlineAt = payload.deadline_at
+        ? normalizeToIsoString(payload.deadline_at, "deadline_at")
+        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const proofPolicy = {
+        min_photos: 1,
+        require_gps: true,
+        required_fields: ["misstand_beschreibung", "standort_verifiziert", "foto_vorhanden"]
+      };
+
+      const ticketResult = await pool.query<DbTicket>(
+        `
+        INSERT INTO tickets (
+          project_id,
+          creator_user_id,
+          title,
+          description,
+          category,
+          task_class,
+          origin,
+          hint_note,
+          status,
+          location_lat,
+          location_lng,
+          geofence_radius_m,
+          time_window_start,
+          time_window_end,
+          deadline_at,
+          proof_policy_json,
+          safety_flags_json
+        )
+        VALUES ($1,$2,$3,$4,$5,2,'BOTTOM_UP_HINT',$6,'NEW',$7,$8,$9,NULL,NULL,$10,$11::jsonb,$12::jsonb)
+        RETURNING *
+        `,
+        [
+          payload.project_id,
+          req.user!.id,
+          payload.title,
+          payload.description,
+          payload.category,
+          payload.description,
+          payload.location_lat,
+          payload.location_lng,
+          payload.geofence_radius_m,
+          deadlineAt,
+          JSON.stringify(proofPolicy),
+          JSON.stringify({ hint_observed_at: observedAt })
+        ]
+      );
+
+      const ticket = ticketResult.rows[0];
+      await replaceTicketTaxonomy(ticket.id, taxonomyTermIds);
+      await writeStatusEvent({
+        ticketId: ticket.id,
+        actorUserId: req.user!.id,
+        fromStatus: null,
+        toStatus: "NEW",
+        eventType: "HINT_TICKET_CREATED",
+        payload: {
+          reason: "worker_bottom_up_hint",
+          observed_at: observedAt
+        }
+      });
+
+      let exifPresent = false;
+      let capturedAt: string | null = observedAt;
+
+      const proofResult = await pool.query<DbProof>(
+        `
+        INSERT INTO proofs (
+          ticket_id,
+          submitted_by_user_id,
+          gps_lat,
+          gps_lng,
+          captured_at,
+          validation_flags_json,
+          checklist_answers_json,
+          notes,
+          qa_status
+        )
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,'PENDING')
+        RETURNING *
+        `,
+        [
+          ticket.id,
+          req.user!.id,
+          payload.location_lat,
+          payload.location_lng,
+          capturedAt,
+          JSON.stringify({ geofence_ok: true, time_ok: true, exif_present: false }),
+          JSON.stringify({
+            misstand_beschreibung: payload.description,
+            standort_verifiziert: true,
+            foto_vorhanden: true
+          }),
+          payload.description
+        ]
+      );
+
+      const proof = proofResult.rows[0];
+      for (const file of files) {
+        const fileBuffer = fs.readFileSync(file.path);
+        const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+        const exifMeta = extractExifMetadata(fileBuffer);
+
+        if (!exifPresent && exifMeta.hasExif) {
+          exifPresent = true;
+        }
+        if (capturedAt == null && exifMeta.capturedAt != null) {
+          capturedAt = exifMeta.capturedAt.toISOString();
+        }
+
+        await pool.query(
+          `
+          INSERT INTO proof_files (proof_id, file_key, file_mime, file_size, sha256)
+          VALUES ($1,$2,$3,$4,$5)
+          `,
+          [proof.id, path.basename(file.path), file.mimetype, file.size, sha256]
+        );
+      }
+
+      await pool.query(
+        `
+        UPDATE proofs
+        SET captured_at = $1,
+            validation_flags_json = $2::jsonb
+        WHERE id = $3
+        `,
+        [capturedAt, JSON.stringify({ geofence_ok: true, time_ok: true, exif_present: exifPresent }), proof.id]
+      );
+
+      await writeStatusEvent({
+        ticketId: ticket.id,
+        actorUserId: req.user!.id,
+        fromStatus: ticket.status,
+        toStatus: ticket.status,
+        eventType: "HINT_PROOF_ATTACHED",
+        payload: {
+          proof_id: proof.id,
+          file_count: files.length
+        }
+      });
+
+      const recipients = await pool.query<{ id: string }>(
+        "SELECT id FROM users WHERE role = ANY($1::text[])",
+        [["QA", "REQUESTER"]]
+      );
+      for (const recipient of recipients.rows) {
+        await pool.query(
+          `
+          INSERT INTO notification_events (user_id, ticket_id, event_type, title, body, payload_json)
+          VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+          `,
+          [
+            recipient.id,
+            ticket.id,
+            "WORKER_HINT_CREATED",
+            `Neuer Hinweis: ${ticket.title}`,
+            "Ein Mitarbeiter hat einen Misstand gemeldet und ein Ticket eroefnet.",
+            JSON.stringify({ ticket_id: ticket.id, origin: ticket.origin })
+          ]
+        );
+      }
+
+      const hydrated = await hydrateTicketTaxonomy([ticket]);
+      res.status(201).json({
+        ...hydrated[0],
+        initial_proof_id: proof.id
+      });
     })
   );
 
@@ -880,12 +1652,13 @@ export function registerRoutes(app: Express): void {
     asyncHandler(async (req, res) => {
       const ticket = await getTicketOrThrow(req.params.ticketId);
       const proofs = await listProofsByTicket(ticket.id);
+      const hydrated = await hydrateTicketTaxonomy([ticket]);
       const eventsResult = await pool.query(
         "SELECT * FROM status_events WHERE ticket_id = $1 ORDER BY created_at ASC",
         [ticket.id]
       );
 
-      res.json({ ...ticket, proofs, status_events: eventsResult.rows });
+      res.json({ ...hydrated[0], proofs, status_events: eventsResult.rows });
     })
   );
 
@@ -983,6 +1756,96 @@ export function registerRoutes(app: Express): void {
       });
 
       res.json(updated);
+    })
+  );
+
+  app.post(
+    "/tickets/:ticketId/move",
+    authorize("ticket:move"),
+    asyncHandler(async (req, res) => {
+      const payload = kanbanMoveSchema.parse(req.body);
+      const ticket = await getTicketOrThrow(req.params.ticketId);
+      const requiredPermission = getKanbanPermissionForTargetStatus(payload.to_status);
+
+      if (!requiredPermission || !hasPermission(req.user!.role, requiredPermission)) {
+        throw new Error(`BAD_REQUEST:Role ${req.user!.role} cannot move ticket to ${payload.to_status}`);
+      }
+      if (payload.to_status === "ARCHIVED" && req.user!.role !== "ADMIN") {
+        throw new Error("BAD_REQUEST:Only ADMIN may archive tickets via kanban");
+      }
+
+      if (payload.to_status === "ACCEPTED") {
+        if (req.user!.role === "WORKER") {
+          const activeResult = await pool.query<{ count: string }>(
+            "SELECT COUNT(*)::text AS count FROM tickets WHERE status = 'ACCEPTED' AND accepted_by_user_id = $1",
+            [req.user!.id]
+          );
+          if (Number(activeResult.rows[0].count) > 0) {
+            throw new Error("BAD_REQUEST:Worker already has an active accepted ticket");
+          }
+        }
+
+        assertTransition(ticket.status, "ACCEPTED");
+        const update = await pool.query<DbTicket>(
+          `
+          UPDATE tickets
+          SET status = 'ACCEPTED',
+              accepted_by_user_id = $1,
+              accepted_at = COALESCE(accepted_at, now())
+          WHERE id = $2
+            AND status = $3
+          RETURNING *
+          `,
+          [req.user!.id, ticket.id, ticket.status]
+        );
+
+        const updated = update.rows[0];
+        if (!updated) {
+          throw new Error("BAD_REQUEST:Ticket status changed concurrently");
+        }
+
+        await writeStatusEvent({
+          ticketId: updated.id,
+          actorUserId: req.user!.id,
+          fromStatus: ticket.status,
+          toStatus: "ACCEPTED",
+          eventType: "KANBAN_MOVE",
+          payload: {
+            target_status: "ACCEPTED"
+          }
+        });
+
+        await queueClassThreeNotifications({
+          ticket: updated,
+          actorUserId: req.user!.id,
+          eventType: "KANBAN_MOVE",
+          body: `Statuswechsel ${ticket.status} -> ACCEPTED`,
+          payload: {
+            from_status: ticket.status,
+            to_status: "ACCEPTED"
+          }
+        });
+
+        const hydrated = await hydrateTicketTaxonomy([updated]);
+        res.json(hydrated[0]);
+        return;
+      }
+
+      await transitionTicketStatus({
+        ticketId: ticket.id,
+        fromStatus: ticket.status,
+        toStatus: payload.to_status,
+        actorUserId: req.user!.id,
+        eventType: "KANBAN_MOVE",
+        payload: {
+          from_status: ticket.status,
+          to_status: payload.to_status
+        }
+      });
+
+      const updated = await getTicketOrThrow(ticket.id);
+      const hydrated = await hydrateTicketTaxonomy([updated]);
+      res.json(hydrated[0]);
     })
   );
 
@@ -1319,6 +2182,14 @@ export function registerRoutes(app: Express): void {
           eventType: "ESCALATION_CREATED",
           payload: escalationPayload
         });
+
+        await queueClassThreeNotifications({
+          ticket: created.rows[0],
+          actorUserId: req.user!.id,
+          eventType: "ESCALATION_CREATED",
+          body: "Neues Klasse-3 Eskalationsticket wurde erstellt",
+          payload: escalationPayload
+        });
       }
 
       const updatedProof = await pool.query<DbProof>("SELECT * FROM proofs WHERE id = $1", [proof.id]);
@@ -1378,6 +2249,243 @@ export function registerRoutes(app: Express): void {
       }
 
       doc.end();
+    })
+  );
+
+  app.get(
+    "/exports/ka5.json",
+    authorize("export:ka5:read"),
+    asyncHandler(async (req, res) => {
+      const projectFilter = typeof req.query.project_id === "string" ? req.query.project_id : null;
+      const dateFromRaw = typeof req.query.date_from === "string" ? req.query.date_from : null;
+      const dateToRaw = typeof req.query.date_to === "string" ? req.query.date_to : null;
+      const params: unknown[] = [];
+      const whereParts: string[] = [];
+
+      if (projectFilter) {
+        params.push(projectFilter);
+        whereParts.push(`t.project_id = $${params.length}`);
+      }
+
+      if (req.user!.role === "REQUESTER") {
+        params.push(req.user!.id);
+        whereParts.push(`p.owner_user_id = $${params.length}`);
+      }
+
+      if (dateFromRaw) {
+        const parsed = new Date(dateFromRaw);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("BAD_REQUEST:date_from must be a valid date");
+        }
+        params.push(parsed.toISOString());
+        whereParts.push(`t.created_at >= $${params.length}`);
+      }
+
+      if (dateToRaw) {
+        const parsed = new Date(dateToRaw);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("BAD_REQUEST:date_to must be a valid date");
+        }
+        params.push(parsed.toISOString());
+        whereParts.push(`t.created_at <= $${params.length}`);
+      }
+
+      const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+      const rows = await pool.query<
+        DbTicket & {
+          project_name: string;
+          proof_count: string;
+          taxonomy_labels: string | null;
+        }
+      >(
+        `
+        WITH proof_counts AS (
+          SELECT ticket_id, COUNT(*)::text AS proof_count
+          FROM proofs
+          GROUP BY ticket_id
+        ),
+        taxonomy_agg AS (
+          SELECT
+            tt.ticket_id,
+            string_agg(tx.label, ', ' ORDER BY tx.domain, tx.order_index, tx.label) AS taxonomy_labels
+          FROM ticket_taxonomy tt
+          JOIN taxonomy_terms tx ON tx.id = tt.term_id
+          GROUP BY tt.ticket_id
+        )
+        SELECT
+          t.*,
+          p.name AS project_name,
+          COALESCE(pc.proof_count, '0') AS proof_count,
+          COALESCE(ta.taxonomy_labels, '') AS taxonomy_labels
+        FROM tickets t
+        JOIN projects p ON p.id = t.project_id
+        LEFT JOIN proof_counts pc ON pc.ticket_id = t.id
+        LEFT JOIN taxonomy_agg ta ON ta.ticket_id = t.id
+        ${whereClause}
+        ORDER BY t.created_at DESC
+        `,
+        params
+      );
+
+      res.json({
+        profile: "KA5_MVP_v1",
+        generated_at: new Date().toISOString(),
+        filters: {
+          project_id: projectFilter,
+          date_from: dateFromRaw,
+          date_to: dateToRaw
+        },
+        rows: rows.rows.map((row) => ({
+          project_id: row.project_id,
+          project_name: row.project_name,
+          ticket_id: row.id,
+          title: row.title,
+          category: row.category,
+          taxonomy_labels: row.taxonomy_labels ?? "",
+          task_class: row.task_class,
+          status: row.status,
+          origin: row.origin,
+          hint_note: row.hint_note ?? "",
+          location_lat: row.location_lat,
+          location_lng: row.location_lng,
+          geofence_radius_m: row.geofence_radius_m,
+          time_window_start: row.time_window_start,
+          time_window_end: row.time_window_end,
+          deadline_at: row.deadline_at,
+          created_at: row.created_at,
+          proof_count: Number(row.proof_count)
+        }))
+      });
+    })
+  );
+
+  app.get(
+    "/exports/ka5.csv",
+    authorize("export:ka5:read"),
+    asyncHandler(async (req, res) => {
+      const projectFilter = typeof req.query.project_id === "string" ? req.query.project_id : null;
+      const dateFromRaw = typeof req.query.date_from === "string" ? req.query.date_from : null;
+      const dateToRaw = typeof req.query.date_to === "string" ? req.query.date_to : null;
+      const params: unknown[] = [];
+      const whereParts: string[] = [];
+
+      if (projectFilter) {
+        params.push(projectFilter);
+        whereParts.push(`t.project_id = $${params.length}`);
+      }
+
+      if (req.user!.role === "REQUESTER") {
+        params.push(req.user!.id);
+        whereParts.push(`p.owner_user_id = $${params.length}`);
+      }
+
+      if (dateFromRaw) {
+        const parsed = new Date(dateFromRaw);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("BAD_REQUEST:date_from must be a valid date");
+        }
+        params.push(parsed.toISOString());
+        whereParts.push(`t.created_at >= $${params.length}`);
+      }
+
+      if (dateToRaw) {
+        const parsed = new Date(dateToRaw);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("BAD_REQUEST:date_to must be a valid date");
+        }
+        params.push(parsed.toISOString());
+        whereParts.push(`t.created_at <= $${params.length}`);
+      }
+
+      const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+      const rows = await pool.query<
+        DbTicket & {
+          project_name: string;
+          proof_count: string;
+          taxonomy_labels: string | null;
+        }
+      >(
+        `
+        WITH proof_counts AS (
+          SELECT ticket_id, COUNT(*)::text AS proof_count
+          FROM proofs
+          GROUP BY ticket_id
+        ),
+        taxonomy_agg AS (
+          SELECT
+            tt.ticket_id,
+            string_agg(tx.label, ', ' ORDER BY tx.domain, tx.order_index, tx.label) AS taxonomy_labels
+          FROM ticket_taxonomy tt
+          JOIN taxonomy_terms tx ON tx.id = tt.term_id
+          GROUP BY tt.ticket_id
+        )
+        SELECT
+          t.*,
+          p.name AS project_name,
+          COALESCE(pc.proof_count, '0') AS proof_count,
+          COALESCE(ta.taxonomy_labels, '') AS taxonomy_labels
+        FROM tickets t
+        JOIN projects p ON p.id = t.project_id
+        LEFT JOIN proof_counts pc ON pc.ticket_id = t.id
+        LEFT JOIN taxonomy_agg ta ON ta.ticket_id = t.id
+        ${whereClause}
+        ORDER BY t.created_at DESC
+        `,
+        params
+      );
+
+      const header = [
+        "project_id",
+        "project_name",
+        "ticket_id",
+        "title",
+        "category",
+        "taxonomy_labels",
+        "task_class",
+        "status",
+        "origin",
+        "hint_note",
+        "location_lat",
+        "location_lng",
+        "geofence_radius_m",
+        "time_window_start",
+        "time_window_end",
+        "deadline_at",
+        "created_at",
+        "proof_count"
+      ];
+
+      const lines = [header.join(",")];
+      for (const row of rows.rows) {
+        lines.push(
+          [
+            row.project_id,
+            row.project_name,
+            row.id,
+            row.title,
+            row.category,
+            row.taxonomy_labels ?? "",
+            row.task_class,
+            row.status,
+            row.origin,
+            row.hint_note ?? "",
+            row.location_lat,
+            row.location_lng,
+            row.geofence_radius_m,
+            row.time_window_start ?? "",
+            row.time_window_end ?? "",
+            row.deadline_at,
+            row.created_at,
+            row.proof_count
+          ]
+            .map((value) => toCsvCell(value))
+            .join(",")
+        );
+      }
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", "attachment; filename=ka5-export.csv");
+      res.send(lines.join("\n"));
     })
   );
 

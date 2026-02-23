@@ -1,4 +1,16 @@
-import { AdminMetrics, AdminUser, Project, QaQueueEntry, Ticket, TicketDetail, TicketTemplate } from "./types";
+import {
+  AdminMetrics,
+  AdminUser,
+  NotificationEvent,
+  Project,
+  PushSubscription,
+  QaQueueEntry,
+  TaxonomyTerm,
+  Ticket,
+  TicketStatus,
+  TicketDetail,
+  TicketTemplate
+} from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -25,7 +37,8 @@ async function request<T>(path: string, init: RequestInitExt = {}): Promise<T> {
     throw new Error(body.error ?? `HTTP ${response.status}`);
   }
 
-  if (response.headers.get("content-type")?.includes("application/pdf")) {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/pdf") || contentType.includes("text/csv")) {
     return (await response.blob()) as T;
   }
 
@@ -63,6 +76,49 @@ export async function createTicket(token: string, payload: Record<string, unknow
   });
 }
 
+export async function createHintTicket(
+  token: string,
+  payload: {
+    project_id: string;
+    title: string;
+    description: string;
+    category: string;
+    location_lat: string;
+    location_lng: string;
+    geofence_radius_m: string;
+    observed_at?: string;
+    deadline_at?: string;
+    taxonomy_term_ids: string[];
+    files: File[];
+  }
+): Promise<Ticket> {
+  const formData = new FormData();
+  formData.append("project_id", payload.project_id);
+  formData.append("title", payload.title);
+  formData.append("description", payload.description);
+  formData.append("category", payload.category);
+  formData.append("location_lat", payload.location_lat);
+  formData.append("location_lng", payload.location_lng);
+  formData.append("geofence_radius_m", payload.geofence_radius_m);
+  if (payload.observed_at) {
+    formData.append("observed_at", payload.observed_at);
+  }
+  if (payload.deadline_at) {
+    formData.append("deadline_at", payload.deadline_at);
+  }
+  formData.append("taxonomy_term_ids_json", JSON.stringify(payload.taxonomy_term_ids));
+
+  for (const file of payload.files) {
+    formData.append("files", file);
+  }
+
+  return request("/tickets/hints", {
+    method: "POST",
+    token,
+    body: formData
+  });
+}
+
 export async function getTicketDetail(token: string, ticketId: string): Promise<TicketDetail> {
   return request(`/tickets/${ticketId}`, { token });
 }
@@ -90,6 +146,18 @@ export async function acceptTicket(token: string, ticketId: string): Promise<Tic
   return request(`/tickets/${ticketId}/accept`, {
     method: "POST",
     token
+  });
+}
+
+export async function moveTicketStatus(
+  token: string,
+  ticketId: string,
+  toStatus: TicketStatus
+): Promise<Ticket> {
+  return request(`/tickets/${ticketId}/move`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ to_status: toStatus })
   });
 }
 
@@ -163,6 +231,40 @@ export async function downloadProjectReport(token: string, projectId: string): P
   return request(`/reports/project.pdf?${new URLSearchParams({ project_id: projectId }).toString()}`, { token });
 }
 
+export async function downloadKa5Csv(
+  token: string,
+  params?: { project_id?: string; date_from?: string; date_to?: string }
+): Promise<Blob> {
+  const query = new URLSearchParams();
+  if (params?.project_id) {
+    query.set("project_id", params.project_id);
+  }
+  if (params?.date_from) {
+    query.set("date_from", params.date_from);
+  }
+  if (params?.date_to) {
+    query.set("date_to", params.date_to);
+  }
+  return request(`/exports/ka5.csv${query.toString() ? `?${query.toString()}` : ""}`, { token });
+}
+
+export async function downloadKa5Json(
+  token: string,
+  params?: { project_id?: string; date_from?: string; date_to?: string }
+): Promise<Record<string, unknown>> {
+  const query = new URLSearchParams();
+  if (params?.project_id) {
+    query.set("project_id", params.project_id);
+  }
+  if (params?.date_from) {
+    query.set("date_from", params.date_from);
+  }
+  if (params?.date_to) {
+    query.set("date_to", params.date_to);
+  }
+  return request(`/exports/ka5.json${query.toString() ? `?${query.toString()}` : ""}`, { token });
+}
+
 export async function listProjects(token: string): Promise<Project[]> {
   return request("/projects", { token });
 }
@@ -196,6 +298,23 @@ export async function updateUserRole(token: string, userId: string, role: string
 
 export async function listTemplates(token: string): Promise<TicketTemplate[]> {
   return request("/templates", { token });
+}
+
+export async function listTaxonomyTerms(
+  token: string,
+  params?: { domain?: string; q?: string; include_inactive?: boolean }
+): Promise<TaxonomyTerm[]> {
+  const query = new URLSearchParams();
+  if (params?.domain) {
+    query.set("domain", params.domain);
+  }
+  if (params?.q) {
+    query.set("q", params.q);
+  }
+  if (params?.include_inactive) {
+    query.set("include_inactive", "true");
+  }
+  return request(`/taxonomy/terms${query.toString() ? `?${query.toString()}` : ""}`, { token });
 }
 
 export async function createTemplate(
@@ -244,6 +363,55 @@ export async function deleteTemplate(token: string, templateId: string): Promise
 
 export async function getAdminMetrics(token: string): Promise<AdminMetrics> {
   return request("/admin/metrics", { token });
+}
+
+export async function savePushSubscription(
+  token: string,
+  payload: {
+    endpoint: string;
+    keys: {
+      p256dh: string;
+      auth: string;
+    };
+  }
+): Promise<PushSubscription> {
+  return request("/push/subscriptions", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function listPushSubscriptions(token: string): Promise<PushSubscription[]> {
+  return request("/push/subscriptions", { token });
+}
+
+export async function deletePushSubscription(token: string, subscriptionId: string): Promise<void> {
+  return request(`/push/subscriptions/${subscriptionId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
+export async function listNotifications(
+  token: string,
+  params?: { unread_only?: boolean; limit?: number }
+): Promise<NotificationEvent[]> {
+  const query = new URLSearchParams();
+  if (params?.unread_only !== undefined) {
+    query.set("unread_only", String(params.unread_only));
+  }
+  if (params?.limit !== undefined) {
+    query.set("limit", String(params.limit));
+  }
+  return request(`/notifications${query.toString() ? `?${query.toString()}` : ""}`, { token });
+}
+
+export async function markNotificationRead(token: string, notificationId: string): Promise<NotificationEvent> {
+  return request(`/notifications/${notificationId}/read`, {
+    method: "POST",
+    token
+  });
 }
 
 export function decodeJwt(token: string): { id: string; email: string; role: string } {

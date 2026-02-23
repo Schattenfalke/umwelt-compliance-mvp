@@ -34,12 +34,14 @@ CREATE TABLE ticket_templates (
 
 CREATE TABLE tickets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid REFERENCES projects(id) ON DELETE SET NULL,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
   creator_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   title text NOT NULL,
   description text,
   category text NOT NULL,
   task_class int NOT NULL CHECK (task_class IN (1,2,3)),
+  origin text NOT NULL DEFAULT 'TOP_DOWN' CHECK (origin IN ('TOP_DOWN','BOTTOM_UP_HINT')),
+  hint_note text,
   status text NOT NULL CHECK (status IN ('NEW','QUALIFIED','PUBLISHED','ACCEPTED','PROOF_SUBMITTED','NEEDS_CHANGES','COMPLETED','REJECTED','ARCHIVED')),
   location_lat double precision NOT NULL,
   location_lng double precision NOT NULL,
@@ -58,6 +60,30 @@ CREATE TABLE tickets (
 CREATE INDEX idx_tickets_status ON tickets(status);
 CREATE INDEX idx_tickets_project ON tickets(project_id);
 CREATE INDEX idx_tickets_loc ON tickets(location_lat, location_lng);
+
+CREATE TABLE taxonomy_terms (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  domain text NOT NULL,
+  label text NOT NULL,
+  slug text NOT NULL UNIQUE,
+  active boolean NOT NULL DEFAULT true,
+  order_index int NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (domain, label)
+);
+
+CREATE INDEX idx_taxonomy_terms_domain_active ON taxonomy_terms(domain, active);
+
+CREATE TABLE ticket_taxonomy (
+  ticket_id uuid NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  term_id uuid NOT NULL REFERENCES taxonomy_terms(id) ON DELETE RESTRICT,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (ticket_id, term_id)
+);
+
+CREATE INDEX idx_ticket_taxonomy_ticket ON ticket_taxonomy(ticket_id);
+CREATE INDEX idx_ticket_taxonomy_term ON ticket_taxonomy(term_id);
 
 CREATE TABLE proofs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -90,6 +116,34 @@ CREATE TABLE proof_files (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE push_subscriptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint text NOT NULL,
+  p256dh text NOT NULL,
+  auth text NOT NULL,
+  user_agent text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, endpoint)
+);
+
+CREATE INDEX idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+CREATE TABLE notification_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticket_id uuid REFERENCES tickets(id) ON DELETE SET NULL,
+  event_type text NOT NULL,
+  title text NOT NULL,
+  body text NOT NULL,
+  payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  is_read boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  read_at timestamptz
+);
+
+CREATE INDEX idx_notification_events_user ON notification_events(user_id, is_read, created_at DESC);
+
 CREATE TABLE status_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   ticket_id uuid NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
@@ -113,4 +167,8 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_tickets_updated
 BEFORE UPDATE ON tickets
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_taxonomy_terms_updated
+BEFORE UPDATE ON taxonomy_terms
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();

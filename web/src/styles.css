@@ -420,10 +420,86 @@ tbody tr:hover {
 
 .inline-fields {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
   align-items: end;
   margin-bottom: 8px;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-pill {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  border: 1px solid rgba(15, 79, 60, 0.45);
+  background: #edf6f0;
+  color: #123628;
+}
+
+.tag-pill.active {
+  background: linear-gradient(145deg, #23765a 0%, #0f4f3c 100%);
+  color: #fff;
+}
+
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.kanban-column {
+  border: 1px solid rgba(24, 49, 35, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  min-height: 260px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.kanban-column header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.kanban-cards {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.kanban-card {
+  border: 1px solid rgba(24, 49, 35, 0.14);
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px;
+  cursor: grab;
+}
+
+.kanban-card:active {
+  cursor: grabbing;
+}
+
+.faq-list h4 {
+  margin: 0.8rem 0 0.2rem;
+}
+
+.faq-list p {
+  margin: 0 0 0.55rem;
+}
+
+select[multiple] {
+  min-height: 120px;
 }
 
 .proof-card {

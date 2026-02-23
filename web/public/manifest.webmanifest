@@ -1,0 +1,17 @@
+{
+  "name": "Umwelt Compliance MVP",
+  "short_name": "UmweltMVP",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f2f24",
+  "theme_color": "#0f4f3c",
+  "description": "Mobile Web App fuer Umwelt-Compliance Workflows mit Ticketing, QA und Kanban.",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
