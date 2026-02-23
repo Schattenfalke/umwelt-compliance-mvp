@@ -94,6 +94,32 @@ function formatPercent(value: number | null): string {
   return `${(value * 100).toFixed(1)} %`;
 }
 
+function getStatusBadgeClass(status: string): string {
+  switch (status) {
+    case "NEW":
+      return "status-badge status-new";
+    case "QUALIFIED":
+      return "status-badge status-qualified";
+    case "PUBLISHED":
+      return "status-badge status-published";
+    case "ACCEPTED":
+      return "status-badge status-accepted";
+    case "PROOF_SUBMITTED":
+      return "status-badge status-proof";
+    case "NEEDS_CHANGES":
+    case "CHANGES_REQUESTED":
+      return "status-badge status-changes";
+    case "APPROVED":
+    case "COMPLETED":
+      return "status-badge status-completed";
+    case "REJECT":
+    case "REJECTED":
+      return "status-badge status-rejected";
+    default:
+      return "status-badge";
+  }
+}
+
 function parseCoordinate(value: string): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -136,6 +162,16 @@ function buildProofMapUrl(lat: number | null, lng: number | null): string | null
     width: 520,
     height: 220
   });
+}
+
+function MapPreviewImage(props: { src: string; alt: string; fallbackText: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return <p className="map-fallback">{props.fallbackText}</p>;
+  }
+
+  return <img src={props.src} alt={props.alt} className="map-image" onError={() => setFailed(true)} />;
 }
 
 function App() {
@@ -787,11 +823,13 @@ function App() {
   return (
     <main className="shell">
       <header className="topbar card">
-        <div>
+        <div className="topbar-title">
           <h2>Umwelt Compliance MVP</h2>
-          <p>
-            {userEmail} ({userRole})
-          </p>
+          <p className="subtle">Ticketing, Proof und QA in einem lesbaren Arbeitsbereich.</p>
+          <div className="identity-row">
+            <span>{userEmail}</span>
+            <span className="role-pill">{userRole}</span>
+          </div>
         </div>
         <nav className="nav-actions">
           {(userRole === "REQUESTER" || userRole === "ADMIN") && (
@@ -829,6 +867,7 @@ function App() {
         <section className="grid-two">
           <article className="card">
             <h3>R-01 Ticket Liste</h3>
+            <p className="subtle">Waehle ein Ticket fuer Detailansicht, Timeline und Report.</p>
             <div className="inline-fields">
               <label>
                 Projektfilter
@@ -869,7 +908,9 @@ function App() {
                       <td>{ticket.title}</td>
                       <td>{ticket.category}</td>
                       <td>{ticket.task_class}</td>
-                      <td>{ticket.status}</td>
+                      <td>
+                        <span className={getStatusBadgeClass(ticket.status)}>{ticket.status}</span>
+                      </td>
                       <td>{formatDate(ticket.deadline_at)}</td>
                     </tr>
                   ))}
@@ -880,6 +921,7 @@ function App() {
 
           <article className="card">
             <h3>R-02 Neues Ticket</h3>
+            <p className="subtle">Pflichtfelder zuerst ausfuellen, dann optionale JSON-Policies verfeinern.</p>
             <form onSubmit={onCreateTicket} className="form-grid">
               <label>
                 Projekt (optional)
@@ -941,7 +983,7 @@ function App() {
                 </select>
               </label>
               <label>
-                Lat
+                Breitengrad (Lat)
                 <input
                   type="number"
                   step="0.000001"
@@ -951,7 +993,7 @@ function App() {
                 />
               </label>
               <label>
-                Lng
+                Laengengrad (Lng)
                 <input
                   type="number"
                   step="0.000001"
@@ -963,7 +1005,11 @@ function App() {
               {createTicketMapUrl && (
                 <div className="map-block">
                   <p className="map-caption">Standort-Vorschau (R-02)</p>
-                  <img src={createTicketMapUrl} alt="Ticket-Standort auf Karte" className="map-image" />
+                  <MapPreviewImage
+                    src={createTicketMapUrl}
+                    alt="Ticket-Standort auf Karte"
+                    fallbackText="Karte konnte nicht geladen werden. Bitte Koordinaten im Formular pruefen."
+                  />
                 </div>
               )}
               <label>
@@ -1021,8 +1067,9 @@ function App() {
               </button>
             </form>
 
-            <h4>Projekt anlegen</h4>
-            <form onSubmit={onCreateProject} className="form-grid">
+              <h4>Projekt anlegen</h4>
+              <p className="subtle">Projekte helfen beim Filtern und Projekt-Report.</p>
+              <form onSubmit={onCreateProject} className="form-grid">
               <label>
                 Projektname
                 <input
@@ -1050,7 +1097,7 @@ function App() {
             {ticketDetail && (
               <>
                 <p>
-                  <strong>Status:</strong> {ticketDetail.status}
+                  <strong>Status:</strong> <span className={getStatusBadgeClass(ticketDetail.status)}>{ticketDetail.status}</span>
                 </p>
                 <p>
                   <strong>Proofs:</strong> {ticketDetail.proofs.length}
@@ -1063,10 +1110,14 @@ function App() {
                   )}
                 </div>
                 <h4>Timeline</h4>
-                <ul>
+                <ul className="timeline">
                   {ticketDetail.status_events.map((event) => (
                     <li key={event.id}>
-                      {formatDate(event.created_at)} | {event.from_status ?? "-"} -&gt; {event.to_status} ({event.event_type})
+                      <span>{formatDate(event.created_at)}</span>
+                      <span>
+                        {(event.from_status ?? "-")} -&gt; {event.to_status}
+                      </span>
+                      <span>{event.event_type}</span>
                     </li>
                   ))}
                 </ul>
@@ -1080,13 +1131,14 @@ function App() {
         <section className="grid-two">
           <article className="card">
             <h3>W-01 Mission Feed</h3>
+            <p className="subtle">Missionsliste nach Distanz. Ticket antippen fuer Details und Annahme.</p>
             <div className="inline-fields">
               <label>
-                Lat
+                Breitengrad
                 <input value={workerLat} onChange={(e) => setWorkerLat(e.target.value)} />
               </label>
               <label>
-                Lng
+                Laengengrad
                 <input value={workerLng} onChange={(e) => setWorkerLng(e.target.value)} />
               </label>
               <label>
@@ -1098,13 +1150,23 @@ function App() {
             {workerMapUrl && (
               <div className="map-block">
                 <p className="map-caption">W-01 Karte (blau = Worker, rot = Missionen)</p>
-                <img src={workerMapUrl} alt="Mission Feed Karte mit Worker und Tickets" className="map-image" />
+                <MapPreviewImage
+                  src={workerMapUrl}
+                  alt="Mission Feed Karte mit Worker und Tickets"
+                  fallbackText="Karte konnte nicht geladen werden. Liste bleibt nach Distanz nutzbar."
+                />
               </div>
             )}
             <ul className="list">
               {tickets.map((ticket) => (
                 <li key={ticket.id} onClick={() => setSelectedTicketId(ticket.id)} className={ticket.id === selectedTicketId ? "active" : ""}>
-                  <strong>{ticket.title}</strong> | {ticket.category} | {ticket.status}
+                  <div className="list-title-row">
+                    <strong>{ticket.title}</strong>
+                    <span className={getStatusBadgeClass(ticket.status)}>{ticket.status}</span>
+                  </div>
+                  <div className="list-meta">
+                    {ticket.category} | Klasse {ticket.task_class} | Deadline {formatDate(ticket.deadline_at)}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1115,14 +1177,21 @@ function App() {
             {!selectedTicket && <p>Ticket aus dem Feed auswaehlen.</p>}
             {selectedTicket && (
               <>
-                <p>
-                  <strong>{selectedTicket.title}</strong> ({selectedTicket.status})
-                </p>
+                <div className="list-title-row">
+                  <strong>{selectedTicket.title}</strong>
+                  <span className={getStatusBadgeClass(selectedTicket.status)}>{selectedTicket.status}</span>
+                </div>
                 <p>
                   Geofence: {selectedTicket.geofence_radius_m}m | Deadline: {formatDate(selectedTicket.deadline_at)}
                 </p>
-                <p>Proof Policy: {JSON.stringify(selectedTicket.proof_policy_json)}</p>
-                <p>Safety: {JSON.stringify(selectedTicket.safety_flags_json)}</p>
+                <div className="json-panel">
+                  <strong>Proof Policy</strong>
+                  <pre className="json-block">{JSON.stringify(selectedTicket.proof_policy_json, null, 2)}</pre>
+                </div>
+                <div className="json-panel">
+                  <strong>Safety Flags</strong>
+                  <pre className="json-block">{JSON.stringify(selectedTicket.safety_flags_json, null, 2)}</pre>
+                </div>
 
                 {selectedTicket.status === "PUBLISHED" && <button onClick={onAccept}>Annehmen</button>}
 
@@ -1131,11 +1200,11 @@ function App() {
                   selectedTicket.status === "PROOF_SUBMITTED") && (
                   <form onSubmit={onSubmitProof} className="form-grid">
                     <label>
-                      Notes
+                      Notizen
                       <textarea value={proofForm.notes} onChange={(e) => setProofForm((v) => ({ ...v, notes: e.target.value }))} />
                     </label>
                     <label>
-                      Checkliste JSON
+                      Checkliste (JSON)
                       <textarea
                         value={proofForm.checklist_answers_json}
                         onChange={(e) => setProofForm((v) => ({ ...v, checklist_answers_json: e.target.value }))}
@@ -1143,15 +1212,15 @@ function App() {
                       />
                     </label>
                     <label>
-                      GPS Lat
+                      GPS Breitengrad
                       <input value={proofForm.gps_lat} onChange={(e) => setProofForm((v) => ({ ...v, gps_lat: e.target.value }))} />
                     </label>
                     <label>
-                      GPS Lng
+                      GPS Laengengrad
                       <input value={proofForm.gps_lng} onChange={(e) => setProofForm((v) => ({ ...v, gps_lng: e.target.value }))} />
                     </label>
                     <label>
-                      Captured At
+                      Aufnahmezeit
                       <input
                         type="datetime-local"
                         value={proofForm.captured_at}
@@ -1159,7 +1228,7 @@ function App() {
                       />
                     </label>
                     <label>
-                      Fotos
+                      Fotos (mindestens gemaess Policy)
                       <input
                         type="file"
                         accept="image/*"
@@ -1197,6 +1266,7 @@ function App() {
         <section className="grid-two">
           <article className="card">
             <h3>Q-01 QA Queue</h3>
+            <p className="subtle">Offene Proofs nach Flag filtern und in der rechten Spalte pruefen.</p>
             <label>
               Flag-Filter
               <select
@@ -1219,9 +1289,16 @@ function App() {
                   onClick={() => setSelectedTicketId(entry.ticket_id)}
                   className={entry.ticket_id === selectedTicketId ? "active" : ""}
                 >
-                  <strong>{entry.ticket_title}</strong> | {entry.category} | {formatDate(entry.submitted_at)}
-                  <br />
-                  Proof: {entry.proof_id} | Worker: {entry.submitted_by_user_id}
+                  <div className="list-title-row">
+                    <strong>{entry.ticket_title}</strong>
+                    <span className={getStatusBadgeClass(entry.qa_status)}>{entry.qa_status}</span>
+                  </div>
+                  <div className="list-meta">
+                    {entry.category} | Eingereicht: {formatDate(entry.submitted_at)}
+                  </div>
+                  <div className="list-meta">
+                    Proof: {entry.proof_id} | Worker: {entry.submitted_by_user_id}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1235,18 +1312,21 @@ function App() {
                 {ticketDetail.proofs.length === 0 && <p>Keine Proofs.</p>}
                 {ticketDetail.proofs.map((proof) => (
                   <div className="proof-card" key={proof.id}>
-                    <p>
-                      <strong>Proof:</strong> {proof.id}
-                    </p>
+                    <div className="list-title-row">
+                      <strong>Proof: {proof.id}</strong>
+                      <span className={getStatusBadgeClass(proof.qa_status)}>{proof.qa_status}</span>
+                    </div>
                     <p>
                       <strong>Worker:</strong> {proof.submitted_by_user_id}
                     </p>
-                    <p>
-                      <strong>Validation:</strong> {JSON.stringify(proof.validation_flags_json)}
-                    </p>
-                    <p>
-                      <strong>Checkliste:</strong> {JSON.stringify(proof.checklist_answers_json)}
-                    </p>
+                    <div className="json-panel">
+                      <strong>Validation Flags</strong>
+                      <pre className="json-block">{JSON.stringify(proof.validation_flags_json, null, 2)}</pre>
+                    </div>
+                    <div className="json-panel">
+                      <strong>Checkliste</strong>
+                      <pre className="json-block">{JSON.stringify(proof.checklist_answers_json, null, 2)}</pre>
+                    </div>
                     <p>
                       <strong>Captured:</strong> {formatDate(proof.captured_at)}
                     </p>
@@ -1269,10 +1349,10 @@ function App() {
                     {buildProofMapUrl(proof.gps_lat, proof.gps_lng) ? (
                       <div className="map-block">
                         <p className="map-caption">Map Preview</p>
-                        <img
+                        <MapPreviewImage
                           src={buildProofMapUrl(proof.gps_lat, proof.gps_lng)!}
                           alt="Proof-Position auf Karte"
-                          className="map-image"
+                          fallbackText="Map Preview nicht verfuegbar. GPS-Werte sind oberhalb sichtbar."
                         />
                       </div>
                     ) : (
@@ -1299,7 +1379,11 @@ function App() {
                 ))}
                 <label>
                   QA Kommentar
-                  <textarea value={qaComment} onChange={(e) => setQaComment(e.target.value)} />
+                  <textarea
+                    value={qaComment}
+                    onChange={(e) => setQaComment(e.target.value)}
+                    placeholder="Pflicht bei Request Changes, Reject und Escalate."
+                  />
                 </label>
               </>
             )}
@@ -1314,76 +1398,84 @@ function App() {
             {!adminMetrics && <p>Keine Metriken geladen.</p>}
             {adminMetrics && (
               <>
-                <p>
-                  <strong>Erzeugt:</strong> {formatDate(adminMetrics.generated_at)}
-                </p>
-                <p>
-                  <strong>Tickets:</strong> {adminMetrics.totals.tickets}
-                </p>
-                <p>
-                  <strong>Proofs:</strong> {adminMetrics.totals.proofs}
-                </p>
-                <p>
-                  <strong>QA entschieden:</strong> {adminMetrics.totals.qa_decided_proofs}
-                </p>
-                <p>
-                  <strong>Median Ticket-&gt;Accept:</strong>{" "}
-                  {formatSeconds(adminMetrics.kpis.median_ticket_to_accepted_seconds)}
-                </p>
-                <p>
-                  <strong>First-Pass-Quote:</strong> {formatPercent(adminMetrics.kpis.first_pass_proof_complete_rate)}
-                </p>
-                <p>
-                  <strong>QA Durchlaufzeit:</strong> {formatSeconds(adminMetrics.kpis.avg_qa_cycle_seconds)}
-                </p>
-                <p>
-                  <strong>Nachforderungsrate:</strong> {formatPercent(adminMetrics.kpis.change_request_rate)}
-                </p>
+                <p className="subtle">Erzeugt: {formatDate(adminMetrics.generated_at)}</p>
+                <div className="metric-grid">
+                  <article className="metric-item">
+                    <span>Tickets</span>
+                    <strong>{adminMetrics.totals.tickets}</strong>
+                  </article>
+                  <article className="metric-item">
+                    <span>Proofs</span>
+                    <strong>{adminMetrics.totals.proofs}</strong>
+                  </article>
+                  <article className="metric-item">
+                    <span>QA entschieden</span>
+                    <strong>{adminMetrics.totals.qa_decided_proofs}</strong>
+                  </article>
+                  <article className="metric-item">
+                    <span>Median Ticket-&gt;Accept</span>
+                    <strong>{formatSeconds(adminMetrics.kpis.median_ticket_to_accepted_seconds)}</strong>
+                  </article>
+                  <article className="metric-item">
+                    <span>First-Pass-Quote</span>
+                    <strong>{formatPercent(adminMetrics.kpis.first_pass_proof_complete_rate)}</strong>
+                  </article>
+                  <article className="metric-item">
+                    <span>QA Durchlaufzeit</span>
+                    <strong>{formatSeconds(adminMetrics.kpis.avg_qa_cycle_seconds)}</strong>
+                  </article>
+                  <article className="metric-item">
+                    <span>Nachforderungsrate</span>
+                    <strong>{formatPercent(adminMetrics.kpis.change_request_rate)}</strong>
+                  </article>
+                </div>
               </>
             )}
           </article>
 
           <article className="card">
             <h3>Admin - User Rollen</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Name</th>
-                  <th>Rolle</th>
-                  <th>Verified</th>
-                  <th>Aktion</th>
-                </tr>
-              </thead>
-              <tbody>
-                {adminUsers.map((user) => (
-                  <tr key={user.id}>
-                    <td>{user.email}</td>
-                    <td>{user.display_name ?? "-"}</td>
-                    <td>
-                      <select
-                        value={user.role}
-                        onChange={(e) => {
-                          const nextRole = e.target.value as Role;
-                          setAdminUsers((current) =>
-                            current.map((row) => (row.id === user.id ? { ...row, role: nextRole } : row))
-                          );
-                        }}
-                      >
-                        <option value="ADMIN">ADMIN</option>
-                        <option value="REQUESTER">REQUESTER</option>
-                        <option value="WORKER">WORKER</option>
-                        <option value="QA">QA</option>
-                      </select>
-                    </td>
-                    <td>{user.is_verified ? "ja" : "nein"}</td>
-                    <td>
-                      <button onClick={() => onUpdateUserRole(user.id, user.role)}>Speichern</button>
-                    </td>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Rolle</th>
+                    <th>Verified</th>
+                    <th>Aktion</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {adminUsers.map((user) => (
+                    <tr key={user.id}>
+                      <td>{user.email}</td>
+                      <td>{user.display_name ?? "-"}</td>
+                      <td>
+                        <select
+                          value={user.role}
+                          onChange={(e) => {
+                            const nextRole = e.target.value as Role;
+                            setAdminUsers((current) =>
+                              current.map((row) => (row.id === user.id ? { ...row, role: nextRole } : row))
+                            );
+                          }}
+                        >
+                          <option value="ADMIN">ADMIN</option>
+                          <option value="REQUESTER">REQUESTER</option>
+                          <option value="WORKER">WORKER</option>
+                          <option value="QA">QA</option>
+                        </select>
+                      </td>
+                      <td>{user.is_verified ? "ja" : "nein"}</td>
+                      <td>
+                        <button onClick={() => onUpdateUserRole(user.id, user.role)}>Speichern</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </article>
 
           <article className="card full-width">
@@ -1454,37 +1546,39 @@ function App() {
             </form>
 
             <h4>Vorhandene Templates</h4>
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Kategorie</th>
-                  <th>Klasse</th>
-                  <th>Geofence</th>
-                  <th>Aktion</th>
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map((template) => (
-                  <tr key={template.id}>
-                    <td>{template.name}</td>
-                    <td>{template.category}</td>
-                    <td>{template.task_class}</td>
-                    <td>{template.default_geofence_radius_m}</td>
-                    <td>
-                      <div className="button-row">
-                        <button type="button" onClick={() => onSelectTemplateForEdit(template)}>
-                          Bearbeiten
-                        </button>
-                        <button type="button" onClick={() => onDeleteTemplate(template.id)}>
-                          Loeschen
-                        </button>
-                      </div>
-                    </td>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Kategorie</th>
+                    <th>Klasse</th>
+                    <th>Geofence</th>
+                    <th>Aktion</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {templates.map((template) => (
+                    <tr key={template.id}>
+                      <td>{template.name}</td>
+                      <td>{template.category}</td>
+                      <td>{template.task_class}</td>
+                      <td>{template.default_geofence_radius_m}</td>
+                      <td>
+                        <div className="button-row">
+                          <button type="button" onClick={() => onSelectTemplateForEdit(template)}>
+                            Bearbeiten
+                          </button>
+                          <button type="button" onClick={() => onDeleteTemplate(template.id)}>
+                            Loeschen
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </article>
         </section>
       )}

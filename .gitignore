@@ -11,5 +11,6 @@ api/coverage
 web/node_modules
 web/dist
 uploads
+.playwright-cli
 .DS_Store
 *.tsbuildinfo
