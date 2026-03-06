@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptTicket,
+  createAdminUser,
   createProject,
   createHintTicket,
   createTemplate,
@@ -136,6 +137,12 @@ const defaultTemplateForm = {
 const defaultProjectForm = {
   name: "",
   description: ""
+};
+
+const defaultAdminUserForm = {
+  email: "",
+  display_name: "",
+  role: "WORKER" as Role
 };
 
 function formatDate(value: string | null | undefined): string {
@@ -313,6 +320,7 @@ function App() {
   const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectForm, setProjectForm] = useState(defaultProjectForm);
+  const [adminUserForm, setAdminUserForm] = useState(defaultAdminUserForm);
   const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
   const [ticketProjectFilter, setTicketProjectFilter] = useState<string>("");
   const [ticketTaxonomyFilter, setTicketTaxonomyFilter] = useState<string[]>([]);
@@ -1105,6 +1113,31 @@ function App() {
     }
   };
 
+  const onCreateAdminUser = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!token || userRole !== "ADMIN") {
+      return;
+    }
+
+    setLoading(true);
+    resetMessages();
+    try {
+      await createAdminUser(token, {
+        email: adminUserForm.email.trim(),
+        display_name: adminUserForm.display_name.trim(),
+        role: adminUserForm.role,
+        is_verified: true
+      });
+      setAdminUserForm(defaultAdminUserForm);
+      setMessage("User erstellt.");
+      setReloadToken((v) => v + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const onApplyTemplateToTicketForm = () => {
     const template = templates.find((item) => item.id === selectedTemplateId);
     if (!template) {
@@ -1205,6 +1238,7 @@ function App() {
     setAdminMetrics(null);
     setProjects([]);
     setProjectForm(defaultProjectForm);
+    setAdminUserForm(defaultAdminUserForm);
     setTaxonomyTerms([]);
     setTicketProjectFilter("");
     setTicketTaxonomyFilter([]);
@@ -2261,6 +2295,48 @@ function App() {
 
           <article className="card">
             <h3>Admin - User Rollen</h3>
+            <p className="subtle">Neue User anlegen und Rollen pflegen.</p>
+            <form onSubmit={onCreateAdminUser} className="form-grid">
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={adminUserForm.email}
+                  onChange={(e) => setAdminUserForm((v) => ({ ...v, email: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Anzeigename (optional)
+                <input
+                  value={adminUserForm.display_name}
+                  onChange={(e) => setAdminUserForm((v) => ({ ...v, display_name: e.target.value }))}
+                />
+              </label>
+              <label>
+                Rolle
+                <select
+                  value={adminUserForm.role}
+                  onChange={(e) => setAdminUserForm((v) => ({ ...v, role: e.target.value as Role }))}
+                >
+                  <option value="ADMIN">ADMIN</option>
+                  <option value="REQUESTER">REQUESTER</option>
+                  <option value="WORKER">WORKER</option>
+                  <option value="QA">QA</option>
+                </select>
+              </label>
+              <div className="button-row">
+                <button type="submit" disabled={loading}>
+                  User anlegen
+                </button>
+                <button type="button" onClick={() => setAdminUserForm(defaultAdminUserForm)}>
+                  Formular leeren
+                </button>
+              </div>
+            </form>
+            <p className="subtle">
+              Hinweis: Login erfolgt im MVP weiterhin ueber das globale Demo-Passwort (`AUTH_DEMO_PASSWORD`).
+            </p>
             <div className="table-wrap">
               <table>
                 <thead>

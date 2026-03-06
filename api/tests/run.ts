@@ -108,7 +108,9 @@ function runRbacTests(): void {
   assert.equal(hasPermission("QA", "proof:qa"), true);
   assert.equal(hasPermission("QA", "ticket:move"), true);
   assert.equal(hasPermission("ADMIN", "admin:users:read"), true);
+  assert.equal(hasPermission("ADMIN", "admin:users:write"), true);
   assert.equal(hasPermission("ADMIN", "admin:metrics:read"), true);
+  assert.equal(hasPermission("REQUESTER", "admin:users:write"), false);
   assert.equal(hasPermission("REQUESTER", "project:create"), true);
   assert.equal(hasPermission("WORKER", "project:create"), false);
   assert.equal(hasPermission("WORKER", "ticket:hint:create"), true);

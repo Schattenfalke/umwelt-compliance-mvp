@@ -60,6 +60,53 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AdminMetrics' }
+  /admin/users:
+    get:
+      summary: List users (admin)
+      responses:
+        "200":
+          description: user list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminUser' }
+    post:
+      summary: Create user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminUserCreate' }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+  /admin/users/{userId}/role:
+    patch:
+      summary: Update role for existing user (admin)
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [ADMIN, REQUESTER, WORKER, QA] }
+              required: [role]
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
   /templates:
     get:
       summary: List ticket templates
@@ -484,6 +531,23 @@ components:
             first_pass_proof_complete_rate: { type: number, nullable: true }
             avg_qa_cycle_seconds: { type: number, nullable: true }
             change_request_rate: { type: number, nullable: true }
+    AdminUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        display_name: { type: string, nullable: true }
+        role: { type: string, enum: [ADMIN, REQUESTER, WORKER, QA] }
+        is_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
+    AdminUserCreate:
+      type: object
+      properties:
+        email: { type: string }
+        display_name: { type: string }
+        role: { type: string, enum: [ADMIN, REQUESTER, WORKER, QA] }
+        is_verified: { type: boolean, default: true }
+      required: [email, role]
     QaQueueEntry:
       type: object
       properties:

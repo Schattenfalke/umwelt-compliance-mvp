@@ -118,6 +118,13 @@ const projectCreateSchema = z.object({
   description: z.string().optional().default("")
 });
 
+const adminUserCreateSchema = z.object({
+  email: z.string().trim().email(),
+  display_name: z.string().trim().max(120).optional().default(""),
+  role: z.enum(["ADMIN", "REQUESTER", "WORKER", "QA"]),
+  is_verified: z.boolean().optional().default(true)
+});
+
 const qualifySchema = z.object({
   task_class: z.number().int().min(1).max(3).optional(),
   proof_policy_json: z.record(z.any()).optional()
@@ -735,6 +742,35 @@ export function registerRoutes(app: Express): void {
         "SELECT id, email, display_name, role, is_verified, created_at FROM users ORDER BY created_at ASC"
       );
       res.json(users.rows);
+    })
+  );
+
+  app.post(
+    "/admin/users",
+    authorize("admin:users:write"),
+    asyncHandler(async (req, res) => {
+      const payload = adminUserCreateSchema.parse(req.body);
+      const normalizedEmail = payload.email.toLowerCase();
+      const normalizedDisplayName = payload.display_name.trim();
+
+      const existingUser = await pool.query<{ id: string }>(
+        "SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        [normalizedEmail]
+      );
+      if (existingUser.rows[0]) {
+        throw new Error("BAD_REQUEST:Email already exists");
+      }
+
+      const created = await pool.query(
+        `
+        INSERT INTO users (email, display_name, role, is_verified)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, email, display_name, role, is_verified, created_at
+        `,
+        [normalizedEmail, normalizedDisplayName.length > 0 ? normalizedDisplayName : null, payload.role, payload.is_verified]
+      );
+
+      res.status(201).json(created.rows[0]);
     })
   );
 

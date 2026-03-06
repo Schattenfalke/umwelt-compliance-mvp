@@ -288,6 +288,17 @@ export async function listUsers(token: string): Promise<AdminUser[]> {
   return request("/admin/users", { token });
 }
 
+export async function createAdminUser(
+  token: string,
+  payload: { email: string; display_name?: string; role: string; is_verified?: boolean }
+): Promise<AdminUser> {
+  return request("/admin/users", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function updateUserRole(token: string, userId: string, role: string): Promise<AdminUser> {
   return request(`/admin/users/${userId}/role`, {
     method: "PATCH",

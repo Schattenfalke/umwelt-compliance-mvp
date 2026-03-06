@@ -134,3 +134,8 @@ Datum: 2026-02-21
 - Unklarheit: `select multiple` ist auf Mobile/PWA uneindeutig und fuehrte zur Wahrnehmung, dass nur ein Tag waehlbar ist.
 - Entscheidung: Taxonomie-Auswahl in Ticket-/Hinweisformularen und Filtern als klickbare Tag-Pills mit klarer Mehrfachauswahl.
 - Folge: Mehrfach-Tags sind auf Desktop und Mobile gleich bedienbar, ohne Modifier-Tasten.
+
+30. Admin-User-Anlage
+- Unklarheit: Welche Defaults bei manuell angelegten Usern gelten sollen.
+- Entscheidung: Neuer Admin-Endpunkt `POST /admin/users` legt User mit expliziter Rolle an; `email` wird kleingeschrieben gespeichert, `display_name` ist optional, `is_verified` defaultet auf `true`.
+- Folge: Admin kann User direkt fuer den Betrieb anlegen und Rollen zuweisen, ohne DB-Zugriff.
