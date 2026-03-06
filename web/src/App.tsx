@@ -2412,57 +2412,150 @@ function App() {
       {view === "help" && (
         <section className="grid-two">
           <article className="card">
-            <h3>Onboarding</h3>
+            <h3>Schnellstart (super einfach)</h3>
             <ol className="timeline">
               <li>
-                <span>1. Projekt waehlen</span>
-                <span>Jede Aufgabe ist einem Projekt zugeordnet.</span>
+                <span>1. Einloggen</span>
+                <span>Waehle eine Rolle und klicke auf "Einloggen".</span>
               </li>
               <li>
-                <span>2. Ticket erstellen oder Hinweis melden</span>
-                <span>Requester erstellt Aufgaben, Worker melden Misstaende bottom-up.</span>
+                <span>2. Projekt auswaehlen</span>
+                <span>Jede Aufgabe muss zu einem Projekt gehoeren.</span>
               </li>
               <li>
-                <span>3. Umsetzung mit Proof</span>
-                <span>Fotos, Standort und Zeit erfassen; QA prueft die Nachweise.</span>
+                <span>3. Aufgabe machen</span>
+                <span>Requester erstellt ein Ticket oder Worker meldet einen Hinweis.</span>
               </li>
               <li>
-                <span>4. Kanban und Exporte</span>
-                <span>Statusuebersicht per Board, KA5-nahe CSV/JSON Exporte fuer Drittsysteme.</span>
+                <span>4. Fotos und Daten senden</span>
+                <span>Worker sendet Proof mit Foto, Ort und Zeit.</span>
+              </li>
+              <li>
+                <span>5. Pruefen</span>
+                <span>QA entscheidet: gut, nachbessern, ablehnen oder eskalieren.</span>
+              </li>
+              <li>
+                <span>6. Uebersicht nutzen</span>
+                <span>Im Kanban siehst du den Status jeder Aufgabe.</span>
               </li>
             </ol>
           </article>
           <article className="card">
-            <h3>FAQ / Hilfe</h3>
+            <h3>Requester: Aufgabe erstellen</h3>
+            <ol className="timeline">
+              <li>
+                <span>1. Tab "Tickets" oeffnen</span>
+                <span>Rechts findest du "Neues Ticket".</span>
+              </li>
+              <li>
+                <span>2. Pflichtfelder ausfuellen</span>
+                <span>Projekt, Titel, Kategorie, Ort, Deadline.</span>
+              </li>
+              <li>
+                <span>3. Tags waehlen</span>
+                <span>Bei Taxonomie kannst du mehrere Tag-Pills anklicken.</span>
+              </li>
+              <li>
+                <span>4. Ticket speichern</span>
+                <span>Klicke auf "Ticket erstellen".</span>
+              </li>
+              <li>
+                <span>5. Weiterfuehren</span>
+                <span>Danach kannst du qualifizieren und publizieren.</span>
+              </li>
+            </ol>
+          </article>
+          <article className="card">
+            <h3>Worker: Hinweis melden</h3>
+            <ol className="timeline">
+              <li>
+                <span>1. Tab "Feed" oeffnen</span>
+                <span>Unten findest du "Bottom-up Hinweis".</span>
+              </li>
+              <li>
+                <span>2. Einfach beschreiben</span>
+                <span>Was ist passiert? Wo ist es?</span>
+              </li>
+              <li>
+                <span>3. Tags anklicken</span>
+                <span>Du kannst mehrere Taxonomie-Tags auswaehlen.</span>
+              </li>
+              <li>
+                <span>4. Foto hinzufuegen</span>
+                <span>Mindestens 1 Bild ist Pflicht.</span>
+              </li>
+              <li>
+                <span>5. Absenden</span>
+                <span>Klicke "Hinweis als Ticket erstellen".</span>
+              </li>
+            </ol>
+          </article>
+          <article className="card">
+            <h3>QA: Proof pruefen</h3>
+            <ol className="timeline">
+              <li>
+                <span>1. Tab "QA" oeffnen</span>
+                <span>Waehle links einen Proof aus der Queue.</span>
+              </li>
+              <li>
+                <span>2. Alles anschauen</span>
+                <span>Pruefe Fotos, GPS, Zeit und Checkliste.</span>
+              </li>
+              <li>
+                <span>3. Entscheidung treffen</span>
+                <span>Approve, Request Changes, Reject oder Escalate.</span>
+              </li>
+              <li>
+                <span>4. Kommentar schreiben</span>
+                <span>Bei Request Changes, Reject und Escalate ist Kommentar Pflicht.</span>
+              </li>
+            </ol>
+          </article>
+          <article className="card full-width">
+            <h3>FAQ / Hilfe (einfach erklaert)</h3>
             <div className="faq-list">
-              <h4>Warum sehe ich frueher \"invalid datetime\"?</h4>
-              <p>Die App nutzt jetzt getrennte Datum/Uhrzeit-Felder und sendet normalisierte ISO-Zeitstempel.</p>
-              <h4>Taxonomie-Tags: wofuer sind sie da?</h4>
+              <h4>Was ist ein Ticket?</h4>
+              <p>Ein Ticket ist eine Aufgabe. Beispiel: "Bitte hier Fotos machen".</p>
+              <h4>Was ist ein Projekt?</h4>
+              <p>Ein Projekt ist ein grosser Ordner. Alle Aufgaben muessen in einen Ordner.</p>
+              <h4>Was ist ein Proof?</h4>
+              <p>Proof bedeutet Beweis: Foto + Ort + Zeit + Checkliste.</p>
+              <h4>Was ist Taxonomie?</h4>
               <p>
-                Taxonomie-Tags klassifizieren Tickets fachlich (z. B. Luzerne, Reifen, Verschmutzung), damit du spaeter
-                sicher filtern, suchen und reporten kannst.
+                Das sind Tags (kleine Etiketten), damit man Aufgaben spaeter schnell findet.
               </p>
+              <h4>Kann ich mehrere Tags waehlen?</h4>
               <p>
-                In Ticket- und Hinweisformularen ist die Auswahl als Tag-Pills umgesetzt. Du kannst mehrere Tags anklicken;
-                aktive Tags sind farblich markiert.
+                Ja. Klicke mehrere Tag-Pills an. Aktive Tags sind farbig.
               </p>
               <h4>Was bedeutet `proof_policy_json`?</h4>
               <p>
-                Dieses JSON steuert, welche Nachweise fuer das Ticket erforderlich sind. Wichtige Felder:
-                `min_photos`, `require_gps`, `redundancy`, `required_fields`.
+                Das sagt der App, wie streng der Beweis sein muss.
+              </p>
+              <p>
+                Wenn du unsicher bist, nutze dieses einfache Beispiel:
               </p>
               <pre className="json-block">
 {`{
-  "min_photos": 2,
+  "min_photos": 1,
   "require_gps": true,
-  "redundancy": 1,
+  "redundancy": 0,
   "required_fields": ["checklist_complete"]
 }`}
               </pre>
+              <p>
+                Bedeutung:
+                `min_photos` = wie viele Bilder mindestens noetig sind.
+                `require_gps` = Ort muss dabei sein.
+                `redundancy` = wie viele zusaetzliche bestaetigte Proofs noetig sind.
+                `required_fields` = welche Checklisten-Felder Pflicht sind.
+              </p>
               <h4>Was bedeutet `safety_flags_json`?</h4>
               <p>
-                Dieses JSON beschreibt Sicherheits- und Zugangsbedingungen vor Ort. Beispiel-Felder:
-                `public_access_only`, `permit_required`, `no_trespass`.
+                Das sind Sicherheitsregeln fuer den Ort.
+              </p>
+              <p>
+                Wenn du unsicher bist, nutze dieses einfache Beispiel:
               </p>
               <pre className="json-block">
 {`{
@@ -2471,12 +2564,18 @@ function App() {
   "no_trespass": true
 }`}
               </pre>
-              <h4>Was trage ich bei Kategorie ein?</h4>
-              <p>Nutze die Tag-Pills: Vegetation, Boden, Abfall, Erosion, Wasser, Sicherheit, Bohrstock, Luzerne, Schadstelle, Monitoring.</p>
-              <h4>Wer bekommt Klasse-3 Hinweise?</h4>
-              <p>Benachrichtigungen gehen an QA und fachliche Requester-Rolle.</p>
+              <h4>Was ist Kategorie?</h4>
+              <p>Kategorie ist ein kurzes Thema, zum Beispiel Vegetation, Boden oder Abfall.</p>
+              <h4>Ich sehe eine Zeit-Fehlermeldung. Was tun?</h4>
+              <p>
+                Erst Datum waehlen, dann Uhrzeit waehlen. Nur beide zusammen sind gueltig.
+              </p>
               <h4>Wie finde ich Luzerne-Faelle?</h4>
-              <p>In der Ticketliste/kanban ueber Taxonomie-Filter oder Suchfeld \"Luzerne\" plus Datumsfilter.</p>
+              <p>
+                In der Ticketliste oder im Kanban den Tag "Luzerne" anklicken und optional Datum setzen.
+              </p>
+              <h4>Wer bekommt Klasse-3 Hinweise?</h4>
+              <p>QA und Requester bekommen dazu Benachrichtigungen.</p>
             </div>
           </article>
         </section>
