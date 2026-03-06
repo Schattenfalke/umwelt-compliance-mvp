@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: umwelt_postgres_customer
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - umwelt_internal
+
+  api:
+    build:
+      context: ../../api
+    container_name: umwelt_api_customer
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_DEMO_PASSWORD: ${AUTH_DEMO_PASSWORD}
+      UPLOAD_DIR: /app/uploads
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      PROOF_UPLOAD_RATE_LIMIT_WINDOW_SEC: ${PROOF_UPLOAD_RATE_LIMIT_WINDOW_SEC}
+      PROOF_UPLOAD_RATE_LIMIT_MAX: ${PROOF_UPLOAD_RATE_LIMIT_MAX}
+      ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
+      CORS_ORIGIN: ${APP_ORIGIN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - api_uploads:/app/uploads
+    networks:
+      - umwelt_internal
+
+  web:
+    build:
+      context: ../../web
+      args:
+        VITE_API_URL: ${PUBLIC_API_BASE_URL}
+    container_name: umwelt_web_customer
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - umwelt_internal
+
+  edge:
+    image: nginx:1.27-alpine
+    container_name: umwelt_edge_customer
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    ports:
+      - "${HTTP_PORT}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - umwelt_internal
+
+volumes:
+  postgres_data:
+  api_uploads:
+
+networks:
+  umwelt_internal:

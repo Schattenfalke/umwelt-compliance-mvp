@@ -101,6 +101,24 @@ Demo-Zugaenge:
 
 ---
 
+## Kundenbetrieb (Interne IT / On-Prem)
+
+Fuer den Betrieb beim Kunden gibt es ein eigenes Deployment-Bundle:
+
+- Compose-Stack: `deploy/customer/docker-compose.customer.yml`
+- Env-Vorlage: `deploy/customer/.env.example`
+- Reverse-Proxy-Konfiguration: `deploy/customer/nginx/default.conf`
+- Betriebsdoku: `deploy/customer/RUNBOOK.md`
+
+Start (aus Repo-Root):
+
+```bash
+cp deploy/customer/.env.example deploy/customer/.env
+docker compose -f deploy/customer/docker-compose.customer.yml --env-file deploy/customer/.env up --build -d
+```
+
+---
+
 ## GitHub Pages (Web)
 
 Das Frontend wird per GitHub Actions aus `web/` gebaut und nach Pages deployed.

@@ -227,6 +227,13 @@ function parseCoordinate(value: string): number | null {
   return parsed;
 }
 
+function toggleIdInSelection(current: string[], id: string): string[] {
+  if (current.includes(id)) {
+    return current.filter((item) => item !== id);
+  }
+  return [...current, id];
+}
+
 function buildStaticMapUrl(params: {
   centerLat: number;
   centerLng: number;
@@ -308,7 +315,7 @@ function App() {
   const [projectForm, setProjectForm] = useState(defaultProjectForm);
   const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
   const [ticketProjectFilter, setTicketProjectFilter] = useState<string>("");
-  const [ticketTaxonomyFilter, setTicketTaxonomyFilter] = useState<string>("");
+  const [ticketTaxonomyFilter, setTicketTaxonomyFilter] = useState<string[]>([]);
   const [ticketTaxonomyQuery, setTicketTaxonomyQuery] = useState<string>("");
   const [ticketDateFrom, setTicketDateFrom] = useState<string>("");
   const [ticketDateTo, setTicketDateTo] = useState<string>("");
@@ -403,8 +410,8 @@ function App() {
       if (ticketProjectFilter) {
         nextParams.project_id = ticketProjectFilter;
       }
-      if (ticketTaxonomyFilter) {
-        nextParams.taxonomy_term_ids = ticketTaxonomyFilter;
+      if (ticketTaxonomyFilter.length > 0) {
+        nextParams.taxonomy_term_ids = ticketTaxonomyFilter.join(",");
       }
       if (ticketTaxonomyQuery.trim()) {
         nextParams.taxonomy_query = ticketTaxonomyQuery.trim();
@@ -1200,7 +1207,7 @@ function App() {
     setProjectForm(defaultProjectForm);
     setTaxonomyTerms([]);
     setTicketProjectFilter("");
-    setTicketTaxonomyFilter("");
+    setTicketTaxonomyFilter([]);
     setTicketTaxonomyQuery("");
     setTicketDateFrom("");
     setTicketDateTo("");
@@ -1342,15 +1349,25 @@ function App() {
                 </select>
               </label>
               <label>
-                Taxonomie
-                <select value={ticketTaxonomyFilter} onChange={(e) => setTicketTaxonomyFilter(e.target.value)}>
-                  <option value="">- alle Tags -</option>
+                Taxonomie (Mehrfachauswahl)
+                <div className="pill-row">
                   {taxonomyTerms.filter((term) => term.active).map((term) => (
-                    <option key={term.id} value={term.id}>
-                      {term.domain}: {term.label}
-                    </option>
+                    <button
+                      key={`filter-${term.id}`}
+                      type="button"
+                      className={`tag-pill ${ticketTaxonomyFilter.includes(term.id) ? "active" : ""}`}
+                      title={`${term.domain}: ${term.label}`}
+                      onClick={() => setTicketTaxonomyFilter((current) => toggleIdInSelection(current, term.id))}
+                    >
+                      {term.label}
+                    </button>
                   ))}
-                </select>
+                </div>
+                <span className="subtle">
+                  {ticketTaxonomyFilter.length > 0
+                    ? `${ticketTaxonomyFilter.length} Tag(s) aktiv`
+                    : "Kein Taxonomie-Filter aktiv"}
+                </span>
               </label>
               <label>
                 Suchbegriff (Tag)
@@ -1579,23 +1596,28 @@ function App() {
                 />
               </label>
               <label>
-                Taxonomie-Tags
-                <select
-                  multiple
-                  value={createTicketForm.taxonomy_term_ids}
-                  onChange={(e) => {
-                    const ids = Array.from(e.target.selectedOptions).map((option) => option.value);
-                    setCreateTicketForm((v) => ({ ...v, taxonomy_term_ids: ids }));
-                  }}
-                >
+                Taxonomie-Tags (Mehrfachauswahl)
+                <div className="pill-row">
                   {taxonomyTerms
                     .filter((term) => term.active)
                     .map((term) => (
-                      <option key={term.id} value={term.id}>
-                        {term.domain}: {term.label}
-                      </option>
+                      <button
+                        key={`create-term-${term.id}`}
+                        type="button"
+                        className={`tag-pill ${createTicketForm.taxonomy_term_ids.includes(term.id) ? "active" : ""}`}
+                        title={`${term.domain}: ${term.label}`}
+                        onClick={() =>
+                          setCreateTicketForm((v) => ({
+                            ...v,
+                            taxonomy_term_ids: toggleIdInSelection(v.taxonomy_term_ids, term.id)
+                          }))
+                        }
+                      >
+                        {term.label}
+                      </button>
                     ))}
-                </select>
+                </div>
+                <span className="subtle">{createTicketForm.taxonomy_term_ids.length} Tag(s) ausgewaehlt</span>
               </label>
               <label>
                 Proof Policy JSON
@@ -1613,6 +1635,9 @@ function App() {
                   required
                 />
               </label>
+              <p className="subtle">
+                Hilfe zu Taxonomie, Proof Policy und Safety Flags findest du im Tab "Hilfe" unter "FAQ / Hilfe".
+              </p>
               <button type="submit" disabled={loading}>
                 Ticket erstellen
               </button>
@@ -1706,15 +1731,25 @@ function App() {
               </select>
             </label>
             <label>
-              Taxonomie
-              <select value={ticketTaxonomyFilter} onChange={(e) => setTicketTaxonomyFilter(e.target.value)}>
-                <option value="">- alle Tags -</option>
+              Taxonomie (Mehrfachauswahl)
+              <div className="pill-row">
                 {taxonomyTerms.filter((term) => term.active).map((term) => (
-                  <option key={term.id} value={term.id}>
-                    {term.domain}: {term.label}
-                  </option>
+                  <button
+                    key={`kanban-filter-${term.id}`}
+                    type="button"
+                    className={`tag-pill ${ticketTaxonomyFilter.includes(term.id) ? "active" : ""}`}
+                    title={`${term.domain}: ${term.label}`}
+                    onClick={() => setTicketTaxonomyFilter((current) => toggleIdInSelection(current, term.id))}
+                  >
+                    {term.label}
+                  </button>
                 ))}
-              </select>
+              </div>
+              <span className="subtle">
+                {ticketTaxonomyFilter.length > 0
+                  ? `${ticketTaxonomyFilter.length} Tag(s) aktiv`
+                  : "Kein Taxonomie-Filter aktiv"}
+              </span>
             </label>
             <button type="button" onClick={() => setReloadToken((v) => v + 1)}>
               Board aktualisieren
@@ -2012,23 +2047,28 @@ function App() {
                 />
               </label>
               <label>
-                Taxonomie-Tags
-                <select
-                  multiple
-                  value={hintForm.taxonomy_term_ids}
-                  onChange={(e) => {
-                    const ids = Array.from(e.target.selectedOptions).map((option) => option.value);
-                    setHintForm((v) => ({ ...v, taxonomy_term_ids: ids }));
-                  }}
-                >
+                Taxonomie-Tags (Mehrfachauswahl)
+                <div className="pill-row">
                   {taxonomyTerms
                     .filter((term) => term.active)
                     .map((term) => (
-                      <option key={`hint-term-${term.id}`} value={term.id}>
-                        {term.domain}: {term.label}
-                      </option>
+                      <button
+                        key={`hint-term-${term.id}`}
+                        type="button"
+                        className={`tag-pill ${hintForm.taxonomy_term_ids.includes(term.id) ? "active" : ""}`}
+                        title={`${term.domain}: ${term.label}`}
+                        onClick={() =>
+                          setHintForm((v) => ({
+                            ...v,
+                            taxonomy_term_ids: toggleIdInSelection(v.taxonomy_term_ids, term.id)
+                          }))
+                        }
+                      >
+                        {term.label}
+                      </button>
                     ))}
-                </select>
+                </div>
+                <span className="subtle">{hintForm.taxonomy_term_ids.length} Tag(s) ausgewaehlt</span>
               </label>
               <label>
                 Fotos (Pflicht)
@@ -2397,6 +2437,40 @@ function App() {
             <div className="faq-list">
               <h4>Warum sehe ich frueher \"invalid datetime\"?</h4>
               <p>Die App nutzt jetzt getrennte Datum/Uhrzeit-Felder und sendet normalisierte ISO-Zeitstempel.</p>
+              <h4>Taxonomie-Tags: wofuer sind sie da?</h4>
+              <p>
+                Taxonomie-Tags klassifizieren Tickets fachlich (z. B. Luzerne, Reifen, Verschmutzung), damit du spaeter
+                sicher filtern, suchen und reporten kannst.
+              </p>
+              <p>
+                In Ticket- und Hinweisformularen ist die Auswahl als Tag-Pills umgesetzt. Du kannst mehrere Tags anklicken;
+                aktive Tags sind farblich markiert.
+              </p>
+              <h4>Was bedeutet `proof_policy_json`?</h4>
+              <p>
+                Dieses JSON steuert, welche Nachweise fuer das Ticket erforderlich sind. Wichtige Felder:
+                `min_photos`, `require_gps`, `redundancy`, `required_fields`.
+              </p>
+              <pre className="json-block">
+{`{
+  "min_photos": 2,
+  "require_gps": true,
+  "redundancy": 1,
+  "required_fields": ["checklist_complete"]
+}`}
+              </pre>
+              <h4>Was bedeutet `safety_flags_json`?</h4>
+              <p>
+                Dieses JSON beschreibt Sicherheits- und Zugangsbedingungen vor Ort. Beispiel-Felder:
+                `public_access_only`, `permit_required`, `no_trespass`.
+              </p>
+              <pre className="json-block">
+{`{
+  "public_access_only": true,
+  "permit_required": false,
+  "no_trespass": true
+}`}
+              </pre>
               <h4>Was trage ich bei Kategorie ein?</h4>
               <p>Nutze die Tag-Pills: Vegetation, Boden, Abfall, Erosion, Wasser, Sicherheit, Bohrstock, Luzerne, Schadstelle, Monitoring.</p>
               <h4>Wer bekommt Klasse-3 Hinweise?</h4>

@@ -124,3 +124,13 @@ Datum: 2026-02-21
 27. Bohrstock-Erweiterung
 - Unklarheit: Freitext oder strukturierte Felder fuer Probenentnahme.
 - Entscheidung: Template "Probenentnahme mit Bohrstock" mit strukturierten Pflichtfeldern (Tiefe, Horizont, Feuchte, etc.).
+
+28. Kundenbetrieb in interner IT
+- Unklarheit: Wie das MVP standardisiert beim Kunden betrieben werden soll (Cloud vs interne Infrastruktur).
+- Entscheidung: Default-Setup als containerisierter On-Prem-Stack (`postgres`, `api`, `web`, `edge`) mit interner Reverse-Proxy-Fuehrung (`/api` -> API) und persistenten Docker-Volumes fuer DB/Uploads.
+- Folge: Kunden-Deployment-Artefakte liegen unter `deploy/customer/`; TLS-Termination erfolgt ueber bestehende Kunden-Infrastruktur.
+
+29. Taxonomie-Mehrfachauswahl in der UI
+- Unklarheit: `select multiple` ist auf Mobile/PWA uneindeutig und fuehrte zur Wahrnehmung, dass nur ein Tag waehlbar ist.
+- Entscheidung: Taxonomie-Auswahl in Ticket-/Hinweisformularen und Filtern als klickbare Tag-Pills mit klarer Mehrfachauswahl.
+- Folge: Mehrfach-Tags sind auf Desktop und Mobile gleich bedienbar, ohne Modifier-Tasten.
